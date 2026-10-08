@@ -1,0 +1,874 @@
+-- easyButtonAuraByUnit.lua
+-- Easy Button Aura by Unit
+--
+-- 剥离自上游 ActionbarEnhanced/Preset.lua（技能栏光环显示），并按用户需求重设计：
+--   · 移除全部预设：光环 ID → 技能 ID 全部由玩家在配置窗口（/babu）手动绑定，按专精存档。
+--   · 例外：武器临时附魔（火舌/风怒/裁决仪式等）保留内置预设（共 6 条，按职业自动启用），
+--     走 GetWeaponEnchantInfo 战斗安全通道，独立覆盖层 + 1 秒 ticker（不参与合并，两把武器独立计时）。
+--   · 光环渲染沿用上游 12.1 官方安全通道【AuraContainer】（暴雪渲染层）：
+--     addon 零读取光环数据、零 secret/taint 问题；倒计时 / 层数 / 显隐全部由暴雪驱动。
+--   · 合并规则：多条绑定指向同一单位 + 同一技能时，运行时合并成一个 includeSpellIDs 集合、
+--     共用一个容器（多光环任一命中即显示，也避免多容器叠在同一按钮上）。
+--   · 存在标记 = CDMButtonAuras 同款柔光材质（Textures/Overlay.tga，ADD 混合）：
+--     挂在暴雪创建的 AuraButton 上（initializeFrame 回调允许），随按钮显隐 → 不需要读任何
+--     光环存在性信号（AuraButton:IsShown() 是 secret，我们根本不读它）；独立纹理层，
+--     不碰 icon（与 easyButtonColor 零冲突）、不依赖各 UI 边框结构。
+--   · 配色：自身增益 = 绿（数字 / 柔光），敌对目标减益 = 橙红数字 / 红柔光。
+--   · 全局开关 = 角色级；绑定 = 专精级。全静默（无 print / 无弹窗）。
+--
+-- 12.x secret 值红线：一律 issecretvalue 判定，不比较 secret 数值，外部数据 pcall 兜底。
+
+EasyButtonAuraByUnit = EasyButtonAuraByUnit or {}
+local B = EasyButtonAuraByUnit
+B.ADDON_NAME = ...
+
+-- =========================================================
+-- 本地化（自维护纯 Lua 表；三语齐全，缺失回退 enUS）
+-- =========================================================
+local LOCALES = {
+    enUS = {
+        SPEC_LABEL        = "Current Specialization",
+        SPEC_UNKNOWN      = "Unknown",
+        ENABLE            = "Enabled",
+        PAGE_DESC         = "Manually bind aura IDs to action bar buttons: the button shows the aura's remaining time and stacks. Weapon enchants (Flametongue, Windfury, etc.) are built-in presets and need no setup.",
+        COL_AURA          = "Aura",
+        COL_UNIT          = "Unit",
+        COL_SPELL         = "Spell",
+        UNIT_PLAYER       = "Self",
+        UNIT_TARGET       = "Target",
+        ADD               = "Add Binding",
+        EMPTY_HINT        = "No bindings yet. Click \"Add Binding\" below to create one.",
+        DEL               = "Delete",
+        ERR_INVALID       = "Spell not found",
+        ERR_NO_AURA       = "Invalid aura",
+        STATUS_NOT_ON_BAR = "not on action bars",
+        OPEN_OPTIONS      = "Open Options",
+        STUB_HINT         = "Click the button below, or type /babu, to open the configuration window.",
+    },
+    zhCN = {
+        SPEC_LABEL        = "当前专精",
+        SPEC_UNKNOWN      = "未知",
+        ENABLE            = "启用",
+        PAGE_DESC         = "把光环 ID 手动绑定到动作条按钮：按钮上显示光环剩余时间与层数。武器附魔（火舌/风怒/裁决仪式等）走内置预设自动显示，无需配置。",
+        COL_AURA          = "光环",
+        COL_UNIT          = "单位",
+        COL_SPELL         = "技能",
+        UNIT_PLAYER       = "自身",
+        UNIT_TARGET       = "目标",
+        ADD               = "添加绑定",
+        EMPTY_HINT        = "还没有绑定。点击下方「添加绑定」创建一条。",
+        DEL               = "删除",
+        ERR_INVALID       = "未找到该法术",
+        ERR_NO_AURA       = "光环 ID 无效",
+        STATUS_NOT_ON_BAR = "不在动作条上",
+        OPEN_OPTIONS      = "打开配置",
+        STUB_HINT         = "点击按钮，或者输入 /babu 打开配置窗口。",
+    },
+    zhTW = {
+        SPEC_LABEL        = "目前專精",
+        SPEC_UNKNOWN      = "未知",
+        ENABLE            = "啟用",
+        PAGE_DESC         = "把光環 ID 手動綁定到快捷列按鈕：按鈕上顯示光環剩餘時間與堆疊數量。武器附魔（火舌／風怒／裁決儀式等）走內建預設自動顯示，無需設定。",
+        COL_AURA          = "光環",
+        COL_UNIT          = "單位",
+        COL_SPELL         = "技能",
+        UNIT_PLAYER       = "自身",
+        UNIT_TARGET       = "目標",
+        ADD               = "新增綁定",
+        EMPTY_HINT        = "還沒有綁定。點擊下方「新增綁定」開始。",
+        DEL               = "刪除",
+        ERR_INVALID       = "找不到該法術",
+        ERR_NO_AURA       = "光環 ID 無效",
+        STATUS_NOT_ON_BAR = "不在快捷列上",
+        OPEN_OPTIONS      = "開啟設定",
+        STUB_HINT         = "點擊按鈕，或者輸入 /babu 開啟設定視窗。",
+    },
+}
+
+local activeLocale = LOCALES[GetLocale()] or LOCALES.enUS
+
+local function L(key)
+    local v = activeLocale[key]
+    if v == nil then v = LOCALES.enUS[key] end
+    return v
+end
+B.L = L
+
+-- =========================================================
+-- 样式常量（时间 / 层数 / 柔光的字体与配色；画面风格集中在此）
+-- =========================================================
+B.Style = {
+    FONT             = STANDARD_TEXT_FONT,
+    FONT_SIZE        = 16,
+    OUTLINE          = "THICKOUTLINE",
+    TIME_COLOR_SELF  = { 0.20, 1.00, 0.20 },                    -- 倒计时（自身增益 / 武器附魔）：绿
+    TIME_COLOR_ENEMY = { 1.00, 0.50, 0.10 },                    -- 倒计时（敌对目标减益）：橙红
+    STACK_COLOR      = { 0x3F / 255, 0xC7 / 255, 0xEB / 255 },  -- 层数：#3FC7EB
+    GLOW_SELF        = { 0.00, 0.70, 0.00 },                    -- 柔光（自身）：绿（CDMButtonAuras 同款）
+    GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
+    GLOW_ALPHA       = 0.5,
+}
+
+B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
+
+-- =========================================================
+-- Secret Value 安全工具（12.x 红线）
+-- =========================================================
+local function IsSecret(v)
+    local ok, res = pcall(function() return issecretvalue and issecretvalue(v) end)
+    return ok and res
+end
+B.IsSecret = IsSecret
+
+-- =========================================================
+-- 技能名 / ID 解析与显示
+-- =========================================================
+-- 名字 / ID 皆可，返回解析后的 spellID（解析失败返回 nil）
+function B.ParseSpellInput(text)
+    text = strtrim(tostring(text or ""))
+    if text == "" then return nil end
+    local num = tonumber(text)
+    if num then
+        local ok, info = pcall(C_Spell.GetSpellInfo, num)
+        if ok and info and info.name then return num end
+        return nil
+    end
+    local okID, id = pcall(function() return C_Spell.GetSpellID(text) end)
+    if okID and id and id > 0 then
+        local ok, info = pcall(C_Spell.GetSpellInfo, id)
+        if ok and info and info.name then return id end
+    end
+    local ok2, info2 = pcall(C_Spell.GetSpellInfo, text)
+    if ok2 and info2 and info2.name then
+        return info2.spellID or info2.id
+    end
+    return nil
+end
+
+-- 光环 ID 解析：纯数字直接接受（光环 ID 客户端可能解析不出名字，交给玩家自己把握）；
+-- 文本则按名字解析成 ID。
+function B.ParseAuraInput(text)
+    text = strtrim(tostring(text or ""))
+    if text == "" then return nil end
+    local num = tonumber(text)
+    if num and num > 0 and num == math.floor(num) then return num end
+    return B.ParseSpellInput(text)
+end
+
+function B.GetSpellDisplayName(spellID)
+    if not spellID then return "" end
+    local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
+    if ok and info and info.name then return info.name end
+    return tostring(spellID)
+end
+
+function B.GetSpellIcon(spellID)
+    if not spellID then return nil end
+    local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
+    if ok and info and info.iconID then return info.iconID end
+    return nil
+end
+
+-- =========================================================
+-- 存档：全局开关（角色级）+ 绑定列表（按专精）
+-- easyButtonAuraByUnitDB.enabled = true|false          （角色级，所有专精共用）
+-- easyButtonAuraByUnitDB.specs[specID] = { list = { cfg... } }
+--   cfg = { auraID = <光环 spellID>, unit = "player"|"target", bindSpell = <目标技能 spellID> }
+-- specID 取自 GetSpecializationInfo(GetSpecialization())，拿不到时用 0（通用槽）。
+-- =========================================================
+local function GetCurrentSpecID()
+    local ok, specID = pcall(function()
+        local idx = GetSpecialization()
+        if not idx or idx == 0 then return nil end
+        return (select(1, GetSpecializationInfo(idx)))
+    end)
+    if ok and specID then return specID end
+    return 0
+end
+
+function B.InitStorage()
+    easyButtonAuraByUnitDB = easyButtonAuraByUnitDB or {}
+    if easyButtonAuraByUnitDB.enabled == nil then
+        easyButtonAuraByUnitDB.enabled = true
+    end
+    if not easyButtonAuraByUnitDB.specs then
+        easyButtonAuraByUnitDB.specs = { [0] = { list = {} } }
+    end
+end
+
+-- 全局开关（角色级；关闭 = 撤下全部容器与覆盖层）
+function B.IsEnabled()
+    return easyButtonAuraByUnitDB and easyButtonAuraByUnitDB.enabled ~= false
+end
+
+-- 切换到「当前专精」配置槽：B.db 指向 specs[specID] 子表
+function B.SelectSpec(specID)
+    B.InitStorage()
+    specID = specID or GetCurrentSpecID()
+    local specs = easyButtonAuraByUnitDB.specs
+    if not specs[specID] then
+        specs[specID] = { list = {} }
+    end
+    specs[specID].list = specs[specID].list or {}
+    B.db = specs[specID]
+    B.currentSpecID = specID
+end
+
+function B.GetList()
+    if B.db and B.db.list then return B.db.list end
+    return {}
+end
+
+-- 新增一条空绑定（返回新条目索引）
+function B.AddBinding()
+    B.InitStorage()
+    local list = B.GetList()
+    list[#list + 1] = { unit = "player" }
+    B.NotifyBindingsChanged()
+    return #list
+end
+
+function B.DeleteBinding(index)
+    local list = B.GetList()
+    if list[index] then
+        table.remove(list, index)
+        B.NotifyBindingsChanged()
+    end
+end
+
+-- 更新某条绑定的字段（auraID / unit / bindSpell）
+function B.UpdateBinding(index, key, value)
+    local list = B.GetList()
+    local cfg = list[index]
+    if cfg then
+        cfg[key] = value
+        B.NotifyBindingsChanged()
+    end
+end
+
+function B.GetCurrentSpecName()
+    local ok, name = pcall(function()
+        local idx = GetSpecialization()
+        if not idx or idx == 0 then return nil end
+        return (select(2, GetSpecializationInfo(idx)))
+    end)
+    if ok and name then return name end
+    return L("SPEC_UNKNOWN")
+end
+
+-- =========================================================
+-- 原生动作条按钮解析（照搬上游 Preset.lua：按法术名找按钮，缓存 + 自愈验证）
+-- =========================================================
+local function FindActionButtonForSpellName(name)
+    if not name then return end
+    local barNames = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) or {}
+    for _, actionBar in ipairs(barNames) do
+        if type(actionBar) == "string" then
+            for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
+                local btn = _G[actionBar .. i]
+                -- 只匹配【可见】的按钮：左右动作条共享 action 槽位，同一技能会同时命中两个按钮，
+                -- 不跳过隐藏按钮会错误匹配到隐藏栏（"拖到右栏却显示在左栏/不显示"）。
+                if btn and btn:IsShown() then
+                    local _, actionSpellID = GetActionInfo(btn.action)
+                    if actionSpellID then
+                        -- 直接 GetSpellName，不要 GetBaseSpell 重定向（上游 AutoCDM 踩过名字错位坑）
+                        local actionSpellName = C_Spell.GetSpellName(actionSpellID)
+                        if name == actionSpellName then
+                            return btn
+                        end
+                    end
+                end
+            end
+        end
+    end
+    for i = 1, (NUM_SPECIAL_BUTTONS or 10) do
+        local stanceBtn = StanceBar and StanceBar.actionButtons and StanceBar.actionButtons[i]
+        if stanceBtn then
+            local stanceSpellID = select(4, GetShapeshiftFormInfo(stanceBtn:GetID()))
+            if stanceSpellID then
+                local stanceSpellName = C_Spell.GetSpellName(stanceSpellID)
+                if name == stanceSpellName then
+                    return stanceBtn
+                end
+            end
+        end
+    end
+end
+
+-- 按钮缓存解析（含自愈验证）：切专精/翻页后按钮可能已换成别的技能，用 GetActionInfo +
+-- 名字比对验证缓存，失效即作废重找（上游 2026-08-21 修「切专精后剩余时间滞留」）。
+local function ResolveButton(p, actionSpellID)
+    local actionName = C_Spell.GetSpellName(actionSpellID)
+    if p.button and p.button.action ~= nil then
+        local okA, _, curSpellID = pcall(GetActionInfo, p.button.action)
+        local curName = (okA and curSpellID) and C_Spell.GetSpellName(curSpellID) or nil
+        if curName ~= actionName then
+            p.button = nil
+        end
+    end
+    if not p.button then
+        p.button = FindActionButtonForSpellName(actionName)
+    end
+    return p.button
+end
+
+-- 失活清理：隐藏容器/覆盖层并清按钮缓存，防残留显示滞留在旧按钮上
+local function DeactivateGroup(p)
+    if p.container then p.container:Hide() end
+    if p.overlay then p.overlay:Hide() end
+    p.button = nil
+    p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
+end
+
+-- 供配置窗口检查「绑定目标技能是否在动作条上」
+function B.BuildSpellButtonMap()
+    local map = {}
+    local barNames = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) or {}
+    local maxBtns = NUM_ACTIONBAR_BUTTONS or 12
+    for _, prefix in ipairs(barNames) do
+        if type(prefix) == "string" then
+            for i = 1, maxBtns do
+                local btn = _G[prefix .. i]
+                if btn and btn.action then
+                    local ok, atype, id = pcall(GetActionInfo, btn.action)
+                    if ok and atype == "spell" and id and id > 0 and not IsSecret(id) and not map[id] then
+                        map[id] = prefix .. i
+                    end
+                end
+            end
+        end
+    end
+    return map
+end
+
+-- =========================================================
+-- 类型 A：unit aura —— 12.1 AuraContainer 暴雪渲染层（照搬上游，数据源换成手动绑定）
+-- =========================================================
+-- 重设 AuraButton 内倒计时框锚点（固定几何：左下时间、左上层数，用户确认）。
+-- ⚠️ 传坐标时用【绝对屏幕坐标】锚到 UIParent——AuraContainer 的 flow layout 会在光环变化/
+--    切目标时异步把容器尺寸覆盖成空布局值(≈1x1)，若 cd 相对 btn/容器锚定会跟着错位。
+local function LayoutAuraChildren(p, left, bottom, width, height, r)
+    local cd = p.cd
+    if not cd then return end
+    if left then
+        r = r or 1
+        local rx, ry = left * r, bottom * r
+        local rw, rh = width * r, height * r
+        cd:ClearAllPoints()
+        cd:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", rx + 1, ry - 6)
+        cd:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", rx + rw * 0.62, ry + rh * 0.62 - 7)
+    else
+        local btn = p.auraButton
+        if not btn then return end
+        local w, h = btn:GetSize()
+        if not w or w <= 0 then w, h = 36, 36 end
+        cd:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 1, -6)
+        cd:SetPoint("TOPRIGHT", btn, "BOTTOMLEFT", w * 0.62, h * 0.62 - 7)
+    end
+end
+
+-- 把容器定位到动作按钮之上（屏幕坐标，绝不锚到按钮；含缩放换算）。
+-- ⚠️ 位置(SetPoint)可缓存；尺寸(SetSize)与子控件布局每次都要重做——对抗暴雪 flow layout
+--    的异步尺寸覆盖（OnLayoutComplete→SetSize），否则尺寸被覆盖后倒计时框错位。
+local function PositionContainer(container, btn, p)
+    if not container or not btn then return false end
+    local left, bottom, width, height = btn:GetRect()
+    if not left then return false end
+    local r = 1
+    local bs, ps = btn:GetEffectiveScale(), UIParent:GetEffectiveScale()
+    if bs and ps and ps > 0 then r = bs / ps end
+    if p._rectL ~= left or p._rectB ~= bottom or p._rectW ~= width or p._rectH ~= height then
+        container:ClearAllPoints()
+        container:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * r, (bottom + height) * r)
+        p._rectL, p._rectB, p._rectW, p._rectH = left, bottom, width, height
+    end
+    container:SetSize(width * r, height * r)
+    LayoutAuraChildren(p, left, bottom, width, height, r)
+    return true
+end
+
+-- initializeFrame 回调：暴雪创建 AuraButton 后，addon 注册子控件。
+-- ⚠️ 子控件必须 parent 到 btn（ValidateInboundScriptObject 强制 descendant）：
+--   cd  → SetDurationCooldown（倒计时数字自带，暴雪驱动）
+--   fs  → SetApplicationCount（层数，>1 才显示）
+--   glow → CDMButtonAuras 同款柔光纹理（ADD 混合），挂在 AuraButton 上随按钮显隐，
+--          不读任何存在性信号。
+local function SetupAuraButton(p, btn)
+    btn:SetAllPoints(p.container)
+    local cd = CreateFrame("Cooldown", nil, btn)
+    cd:SetDrawSwipe(false)
+    cd:SetDrawEdge(false)
+    cd:SetHideCountdownNumbers(false)
+    btn:SetDurationCooldown(cd)
+    p.cd = cd
+    local fs = btn:CreateFontString(nil, "OVERLAY")
+    fs:SetPoint("TOPLEFT", btn, "TOPLEFT", 5, -5)
+    fs:SetFont(B.Style.FONT, B.Style.FONT_SIZE, B.Style.OUTLINE)
+    local sc = B.Style.STACK_COLOR
+    fs:SetTextColor(sc[1], sc[2], sc[3])
+    btn:SetApplicationCount(fs)
+    p.stacksFS = fs
+
+    local glow = btn:CreateTexture(nil, "ARTWORK")
+    glow:SetAllPoints(btn)
+    glow:SetTexture(B.OVERLAY_TEXTURE)
+    glow:SetBlendMode("ADD")
+    local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
+    glow:SetVertexColor(c[1], c[2], c[3], B.Style.GLOW_ALPHA)
+    p.glow = glow
+
+    p.auraButton = btn
+    LayoutAuraChildren(p)
+end
+
+-- 为合并组创建 AuraContainer（每组一个容器，独立定位到各自按钮）。
+-- 光环过滤用 includeSpellIDs（按 auraData.spellId 精确匹配光环 ID）。
+-- 过滤串：player → HELPFUL|PLAYER（只看自己施放的增益）；
+--         target → HARMFUL|PLAYER（只看自己施放到敌对目标身上的减益，上游烈焰震击同款）。
+local function InitAuraGroup(p)
+    if p.container then return true end
+    if p._initFailed then return false end  -- 上次战斗中创建失败 → 等脱战重试
+    local filter = (p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
+
+    local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
+    container:SetFrameStrata("HIGH")
+    container:SetFrameLevel(1000)
+    container:SetSize(36, 36)
+    container:SetUnit(p.unit)
+    container:SetEnabled(true)
+    -- ⚠️ 先挂引用：AddAuraSlot 的 initializeFrame 回调【同步】执行，
+    --   SetupAuraButton 里要用 p.container 做 SetAllPoints
+    p.container = container
+
+    local includeSpellIDs = {}
+    for auraID in pairs(p.auraIDs) do
+        includeSpellIDs[auraID] = true
+    end
+
+    local auraFrame
+    local ok = pcall(function()
+        auraFrame = container:AddAuraSlot("byunit", filter, {
+            candidateFilters = { includeSpellIDs = includeSpellIDs },
+            initializeFrame = function(btn) SetupAuraButton(p, btn) end,
+        })
+    end)
+    if not ok then
+        p._initFailed = true
+        p.container = nil
+        container:Hide()
+        return false
+    end
+    p.auraFrame = auraFrame
+    container:Show()
+    return true
+end
+
+-- Cooldown 倒计时数字 FontString 要等暴雪首次 SetCooldownFromDurationObject 后才存在，
+-- 用低频 ticker 轮询，设置一次字体/颜色后标记完成（幂等、廉价）。
+-- ⚠️ 数字 FontString 带 secret aspect，SetFont/SetTextColor 包 pcall 防御。
+local function ApplyCountdownFont(p)
+    local cd = p.cd
+    if not cd or p.cdStyled then return end
+    local cds = cd.GetCountdownFontString and cd:GetCountdownFontString()
+    if not cds then return end
+    local c = (p.unit == "target") and B.Style.TIME_COLOR_ENEMY or B.Style.TIME_COLOR_SELF
+    pcall(function()
+        cds:SetFont(B.Style.FONT, B.Style.FONT_SIZE, B.Style.OUTLINE)
+        cds:SetTextColor(c[1], c[2], c[3])
+    end)
+    p.cdStyled = true
+end
+
+local function UpdateAuraGroup(p)
+    if not p.actionSpellID or not next(p.auraIDs) then return end
+    -- 玩家没学该施放技能（切专精后技能不可用）→ 清理残留并跳过
+    if not IsPlayerSpell(p.actionSpellID) then
+        DeactivateGroup(p)
+        return
+    end
+    -- 目标类绑定只在敌对目标身上生效：友方目标（或无目标）时停用，
+    -- 防止 includeSpellIDs 被暴雪在 HARMFUL 通道忽略后误匹配任意减益。
+    if p.unit == "target" then
+        local exists, friendly
+        local ok1, e = pcall(UnitExists, "target")
+        if ok1 then exists = e and e ~= false end
+        local ok2, f = pcall(UnitIsFriend, "player", "target")
+        if ok2 then friendly = f and f ~= false end
+        if not exists or friendly then
+            if p.container then p.container:Hide() end
+            return
+        end
+    end
+    if not InitAuraGroup(p) then return end
+    local container = p.container
+
+    -- 解析显示目标按钮（缓存+自愈验证，找不到时 ticker 定期重试；该技能必须放在动作条上）
+    local btn = ResolveButton(p, p.actionSpellID)
+    if not btn then
+        container:Hide()
+        return
+    end
+    if not PositionContainer(container, btn, p) then
+        container:Hide()
+        return
+    end
+    -- 容器保持可见以接收 UNIT_AURA（ShouldRegisterForDynamicEvents = IsVisible and IsEnabled）；
+    -- AuraButton 的显隐由暴雪 ApplyVisibility 控制（有光环显示、无光环隐藏），柔光随按钮显隐
+    container:Show()
+    ApplyCountdownFont(p)
+end
+
+-- =========================================================
+-- 类型 B：武器临时附魔（内置预设，按职业自动启用）
+--   走 item enchant 通道（非 unit aura），12.1 战斗中也能检测（GetWeaponEnchantInfo 战斗安全）。
+--   主路径 GetWeaponEnchantInfo()（返回 enchantID + 剩余毫秒），兜底
+--   C_PaperDollInfo.GetTemporaryEnchantmentInfo（12.1 官方替代 API）。
+-- =========================================================
+local WEAPON_ENCHANT_PRESETS = {
+    SHAMAN = {
+        { enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" },          -- 火舌武器
+        { enchantID = 5401, actionSpellID = 33757,  enchantName = "Windfury" },             -- 风怒武器
+        { enchantID = 6498, actionSpellID = 382021, enchantName = "Earthliving Weapon" },   -- 大地生命武器
+        { enchantID = 7528, actionSpellID = 457481, enchantName = "Tidecaller's Guard" },   -- 唤潮者护卫
+    },
+    PALADIN = {
+        { enchantID = 7144, actionSpellID = 433583, enchantName = "Ritual of Judgment" },       -- 裁决仪式
+        { enchantID = 7143, actionSpellID = 433568, enchantName = "Ritual of Sanctification" }, -- 圣化仪式
+    },
+}
+
+local function GetWeaponEnchantExpiration(enchantID)
+    -- 主路径：旧 API（上游实测 12.1 仍可用）
+    local ok, hasMain, mainExp, _, mainID, hasOff, offExp, _, offID = pcall(GetWeaponEnchantInfo)
+    if ok then
+        if mainID == enchantID and mainExp then return mainExp / 1000 end
+        if offID == enchantID and offExp then return offExp / 1000 end
+    end
+    -- 兜底：12.1 新 API。返回结构 TemporaryItemEnchantInfo{enchantID, remainingTimeMs, ...}
+    local function trySlot(slot)
+        local fok, info = pcall(C_PaperDollInfo.GetTemporaryEnchantmentInfo, slot)
+        if fok and info and info.enchantID == enchantID and info.remainingTimeMs then
+            return info.remainingTimeMs / 1000
+        end
+    end
+    for _, slot in ipairs({ 16, 17 }) do  -- INVSLOT_MAINHAND, INVSLOT_OFFHAND
+        local sec = trySlot(slot)
+        if sec and sec > 0 then return sec end
+    end
+    return nil
+end
+
+-- 武器附魔倒计时【每秒】驱动：非 aura 通道战斗安全，1 秒精度足够（不挂每帧 OnUpdate）
+local function EnchantTick(p)
+    local ov = p.overlay
+    local cd = p.cd
+    local expSec = GetWeaponEnchantExpiration(p.enchantID)
+    if not expSec or expSec <= 0 then
+        ov:Hide()
+        p._active = false
+        return
+    end
+    local w, h = ov:GetSize()
+    cd:SetParent(ov)
+    cd:ClearAllPoints()
+    cd:SetPoint("BOTTOMLEFT", ov, "BOTTOMLEFT", 1, -6)
+    cd:SetPoint("TOPRIGHT", ov, "BOTTOMLEFT", w * 0.62, h * 0.62 - 7)
+    cd:SetDrawSwipe(false)
+    cd:SetDrawEdge(false)
+    cd:SetHideCountdownNumbers(false)
+    pcall(function() cd:SetCooldown(GetTime(), expSec) end)
+    local cds = cd.GetCountdownFontString and cd:GetCountdownFontString()
+    if cds then
+        cds:SetFont(B.Style.FONT, B.Style.FONT_SIZE, B.Style.OUTLINE)
+        local c = B.Style.TIME_COLOR_SELF  -- 自身附魔：绿
+        cds:SetTextColor(c[1], c[2], c[3])
+    end
+    if p.stacksFS then p.stacksFS:Hide() end
+    cd:Show()
+    ov:Show()
+    p._active = true
+end
+
+-- 类型 B 覆盖层容器：UIParent 中立容器（与动作按钮【零锚依赖】，绝不 SetPoint 到按钮）。
+local function GetEnchantOverlay(p)
+    if p.overlay then return p.overlay end
+    local ov = CreateFrame("Frame", nil, UIParent)
+    ov:SetFrameStrata("HIGH")
+    ov:SetFrameLevel(1000)
+    ov:SetSize(36, 36)
+    ov:Hide()
+    local cd = CreateFrame("Cooldown", nil, ov)
+    cd:SetHideCountdownNumbers(false)
+    cd:Hide()
+    local fs = ov:CreateFontString(nil, "OVERLAY")
+    fs:Hide()
+    -- 柔光纹理（ADD 混合）：附魔 = 自身 = 绿
+    local glow = ov:CreateTexture(nil, "ARTWORK")
+    glow:SetAllPoints(ov)
+    glow:SetTexture(B.OVERLAY_TEXTURE)
+    glow:SetBlendMode("ADD")
+    local c = B.Style.GLOW_SELF
+    glow:SetVertexColor(c[1], c[2], c[3], B.Style.GLOW_ALPHA)
+    p.overlay = ov
+    p.cd = cd
+    p.stacksFS = fs
+    p.glow = glow
+    return ov
+end
+
+-- 覆盖层定位。overlay 是 addon 自建的普通 Frame，无暴雪异步覆盖 →
+-- 坐标未变即可完整跳过 SetPoint/SetSize（每秒 ticker 省去无谓锚点操作）。
+local function PositionOverlay(ov, btn, p)
+    if not ov or not btn then return false end
+    local left, bottom, width, height = btn:GetRect()
+    if not left then return false end
+    if p._rectL == left and p._rectB == bottom and p._rectW == width and p._rectH == height then
+        return true
+    end
+    local r = 1
+    local bs, ps = btn:GetEffectiveScale(), UIParent:GetEffectiveScale()
+    if bs and ps and ps > 0 then r = bs / ps end
+    ov:ClearAllPoints()
+    ov:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * r, (bottom + height) * r)
+    ov:SetSize(width * r, height * r)
+    p._rectL, p._rectB, p._rectW, p._rectH = left, bottom, width, height
+    return true
+end
+
+local function UpdateEnchant(p)
+    if not p.enchantID or not p.actionSpellID then return end
+    -- 玩家没学该施放技能 → 清理残留并跳过
+    -- （武器附魔在武器上、跨专精持续存在：切专精后不清覆盖层，倒计时会冻结滞留直到 reload）
+    if not IsPlayerSpell(p.actionSpellID) then
+        DeactivateGroup(p)
+        return
+    end
+    local btn = ResolveButton(p, p.actionSpellID)
+    if not btn then return end
+    local ov = GetEnchantOverlay(p)
+    if not PositionOverlay(ov, btn, p) then
+        ov:Hide()
+        return
+    end
+    EnchantTick(p)   -- 立即填充一次（之后由 Tick → RefreshEnchants 每秒刷新）
+end
+
+local function RefreshEnchants()
+    for _, p in ipairs(B.enchants) do
+        pcall(UpdateEnchant, p)
+    end
+end
+
+-- =========================================================
+-- 合并构建：绑定列表 → 运行时组（同单位+同技能的多条绑定合并共用一个容器）
+-- =========================================================
+B.groups = {}    -- 类型 A：{ unit, actionSpellID, auraIDs = {[id]=true}, container, ... }
+B.enchants = {}  -- 类型 B：{ enchantID, actionSpellID, overlay, cd, ... }
+
+local function RebuildGroups()
+    if InCombatLockdown() then
+        B._pendingRebuild = true   -- 战斗中不建/不拆容器，脱战后重试
+        return
+    end
+    B._pendingRebuild = false
+    -- 撤下旧的（容器 / 覆盖层），避免重建后残留
+    for _, p in ipairs(B.groups) do
+        if p.container then p.container:Hide() end
+    end
+    for _, p in ipairs(B.enchants) do
+        if p.overlay then p.overlay:Hide() end
+    end
+    wipe(B.groups)
+    wipe(B.enchants)
+    if not B.IsEnabled() then return end
+
+    -- 光环绑定：按 unit + bindSpell 合并
+    local merged = {}
+    local order = {}
+    for _, cfg in ipairs(B.GetList()) do
+        if cfg.auraID and cfg.bindSpell then
+            local key = tostring(cfg.unit or "player") .. ":" .. tostring(cfg.bindSpell)
+            local g = merged[key]
+            if not g then
+                g = { unit = cfg.unit or "player", actionSpellID = cfg.bindSpell, auraIDs = {} }
+                merged[key] = g
+                order[#order + 1] = g
+            end
+            g.auraIDs[cfg.auraID] = true
+        end
+    end
+    for _, g in ipairs(order) do
+        B.groups[#B.groups + 1] = g
+    end
+
+    -- 武器附魔内置预设：按当前职业过滤
+    local _, classToken = UnitClass("player")
+    local presets = classToken and WEAPON_ENCHANT_PRESETS[classToken]
+    if presets then
+        for _, e in ipairs(presets) do
+            B.enchants[#B.enchants + 1] = {
+                enchantID = e.enchantID,
+                actionSpellID = e.actionSpellID,
+                enchantName = e.enchantName,
+            }
+        end
+    end
+end
+
+-- =========================================================
+-- 全量刷新 / 低频 ticker
+-- =========================================================
+local function RefreshAll()
+    for _, p in ipairs(B.groups) do
+        pcall(UpdateAuraGroup, p)
+    end
+    RefreshEnchants()
+end
+
+local function Tick()
+    -- 类型 A：重定位容器 + 轮询倒计时字体（内容更新由暴雪 AuraContainer 自行驱动）
+    for _, p in ipairs(B.groups) do
+        pcall(UpdateAuraGroup, p)
+    end
+    -- 类型 B：清理到期 / 重附魔 / 重定位
+    RefreshEnchants()
+end
+
+-- =========================================================
+-- 变更通知（Options 实现对应入口）
+-- =========================================================
+local rebuildTimer
+local function ScheduleRebuild(delay)
+    if rebuildTimer then rebuildTimer:Cancel() end
+    rebuildTimer = C_Timer.NewTimer(delay or 0.2, function()
+        rebuildTimer = nil
+        RebuildGroups()
+        RefreshAll()
+    end)
+end
+
+function B.NotifyBindingsChanged()
+    if B.RefreshPanel then B.RefreshPanel() end
+    ScheduleRebuild(0.2)
+end
+
+-- 全局开关（Options 复选框调用）
+function B.SetEnabled(v)
+    B.InitStorage()
+    easyButtonAuraByUnitDB.enabled = v and true or false
+    RebuildGroups()
+    RefreshAll()
+    if B.RefreshPanel then B.RefreshPanel() end
+end
+
+-- 防抖全量刷新（UNIT_AURA 等高频事件）
+local refreshTimer
+function B.ScheduleRefresh(delay)
+    if refreshTimer then refreshTimer:Cancel() end
+    refreshTimer = C_Timer.NewTimer(delay or 0.2, function()
+        refreshTimer = nil
+        RefreshAll()
+    end)
+end
+
+-- =========================================================
+-- 事件驱动（事件集合与防抖策略照搬上游 Preset.lua）
+-- =========================================================
+-- 动作条/页面/形态/载具/御龙术/专精切换：缓存失效 + 延迟重匹配。
+-- ⚠️ 绝不【立即】刷新：ACTIONBAR_PAGE_CHANGED 等事件在 SetActionBarPage 的保护上下文
+--    同步触发，立即操作容器会被 taint/block，导致倒计时框错位。
+local actionbarEvents = {
+    ACTIONBAR_SLOT_CHANGED       = true,
+    ACTIONBAR_PAGE_CHANGED       = true,
+    ACTIVE_TALENT_GROUP_CHANGED  = true,
+    UPDATE_BONUS_ACTIONBAR       = true,
+    UPDATE_OVERRIDE_ACTIONBAR    = true,
+    UPDATE_SHAPESHIFT_FORM       = true,
+    UPDATE_POSSESS_BAR           = true,
+    UPDATE_MULTI_CAST_ACTIONBAR  = true,
+}
+
+local function InvalidateButtons()
+    for _, p in ipairs(B.groups) do
+        p.button = nil
+        p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
+    end
+    for _, p in ipairs(B.enchants) do
+        p.button = nil
+        p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
+    end
+end
+
+local evFrame = CreateFrame("Frame")
+local auraRefreshTimer = nil
+evFrame:RegisterEvent("PLAYER_LOGIN")
+for ev in pairs(actionbarEvents) do evFrame:RegisterEvent(ev) end
+evFrame:RegisterEvent("PLAYER_REGEN_ENABLED")       -- 脱战：重试战斗中建失败的容器 + 恢复配置窗口
+evFrame:RegisterEvent("PLAYER_REGEN_DISABLED")      -- 进战：隐藏配置窗口
+evFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")   -- 武器附魔（重附/替换/卸下）立即刷新
+evFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")     -- 同上兜底
+evFrame:RegisterUnitEvent("UNIT_AURA", "player", "target")
+evFrame:RegisterEvent("PLAYER_TARGET_CHANGED")      -- 切目标：target 容器需手动重新解析
+evFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")  -- 切专精：换绑定槽 + 重建
+
+evFrame:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_LOGIN" then
+        B.SelectSpec()
+        RebuildGroups()
+        -- 登录后稍候再刷新，确保动作条按钮已就绪（ticker 兜底）
+        C_Timer.After(0, RefreshAll)
+        C_Timer.After(0.5, RefreshAll)
+        -- 低频 ticker：类型 A 重定位/字体 + 类型 B 清理（容器内容由暴雪自行驱动）
+        C_Timer.NewTicker(1, Tick)
+    elseif actionbarEvents[event] then
+        InvalidateButtons()
+        C_Timer.After(0.1, function() InvalidateButtons(); RefreshAll() end)
+        C_Timer.After(0.5, function() InvalidateButtons(); RefreshAll() end)
+    elseif event == "UNIT_AURA" then
+        -- 光环增删 → 防抖刷新（只补重定位；AuraButton 显隐由暴雪实时驱动，防抖 0.2s 无感）
+        if auraRefreshTimer then auraRefreshTimer:Cancel() end
+        auraRefreshTimer = C_Timer.NewTimer(0.2, function()
+            auraRefreshTimer = nil
+            RefreshAll()
+        end)
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        -- AuraContainer 不监听目标切换，unit="target" 的容器需显式触发重新解析光环
+        for _, p in ipairs(B.groups) do
+            if p.unit == "target" and p.container then
+                pcall(function() p.container:UpdateAllAuras() end)
+            end
+        end
+        -- UpdateAllAuras 触发 FullAuraRebuild，flow layout 下一帧会把容器尺寸覆盖成空布局值，
+        -- 延迟重新定位，避免倒计时框短暂错位（否则要等 1 秒 ticker 才纠正）
+        C_Timer.After(0.05, function()
+            for _, p in ipairs(B.groups) do
+                if p.unit == "target" then pcall(UpdateAuraGroup, p) end
+            end
+        end)
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        -- 脱战：解除战斗中建容器失败的限制；战斗中被搁置的重建在此补做
+        for _, p in ipairs(B.groups) do p._initFailed = nil end
+        if B._pendingRebuild then
+            RebuildGroups()
+        end
+        RefreshAll()
+        if B.OnCombatChanged then B.OnCombatChanged(false) end
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        if B.OnCombatChanged then B.OnCombatChanged(true) end
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then
+        -- 武器附魔变化：非 aura 通道，战斗中也安全
+        RefreshEnchants()
+    elseif event == "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" then
+        B.SelectSpec()
+        ScheduleRebuild(0.2)
+        if B.RefreshPanel then B.RefreshPanel() end
+    end
+end)
+
+-- =========================================================
+-- slash 命令：/babu 打开配置窗口（实现在 Options.lua）
+-- =========================================================
+SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
+SlashCmdList["EASYBUTTONAURABYUNIT"] = function()
+    if B.ToggleConfigFrame then B.ToggleConfigFrame() end
+end

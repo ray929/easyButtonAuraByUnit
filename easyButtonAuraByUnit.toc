@@ -1,0 +1,18 @@
+## Interface: 120100, 16001
+## Title: Easy Button Aura by Unit
+## Title-zhCN: 手动绑定动作条光环
+## Title-zhTW: 手動綁定快捷列光環
+## Notes: Manually bind aura IDs to action bar buttons: shows remaining time and stacks on the button, with soft edge glow. Weapon enchants (Flametongue, Windfury, etc.) are built-in presets.
+## Notes-zhCN: 把光环 ID 手动绑定到动作条按钮：按钮上显示光环剩余时间、层数与柔光标记。武器附魔（火舌/风怒/裁决仪式等）走内置预设自动显示。
+## Notes-zhTW: 把光環 ID 手動綁定到快捷列按鈕：按鈕上顯示光環剩餘時間、堆疊數量與柔光標記。武器附魔（火舌／風怒／裁決儀式等）走內建預設自動顯示。
+## Author: ray929
+## Version: @project-version@
+## SavedVariablesPerCharacter: easyButtonAuraByUnitDB
+## DefaultState: enabled
+## Category: Action Bars
+## Category-zhCN: 动作条
+## Category-zhTW: 快捷列
+## IconTexture: Interface\AddOns\easyButtonAuraByUnit\Icon.tga
+
+easyButtonAuraByUnit.lua
+Options.lua
