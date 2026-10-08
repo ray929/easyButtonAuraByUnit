@@ -2,12 +2,13 @@
 -- Easy Button Aura by Unit — 设置界面
 --
 -- 界面分两块（沿用 easyButtonAuraByCDM 的既定模式）：
---   1. 暴雪插件设置里的【占位页】：只有一句提示 + 一个按钮，点按钮打开自有配置窗口。
---   2. 【自有配置窗口】：承载全部绑定控件；用 /babu 或占位页按钮打开。
---
--- 绑定列表是玩家手动维护的数组（每行 = 一条绑定）：
---   光环 ID 输入框 + 追踪单位下拉（自身/目标）+ 技能 ID 输入框 + 删除按钮；
---   窗口底部「添加绑定」按钮追加空行。同单位+同技能的多条绑定由主文件在运行时合并。
+--   1. 暴雪插件设置里的【占位页】：标题（金色大字，与插件图标同色系）+ 提示 + 按钮，
+--      点按钮打开自有配置窗口。
+--   2. 【自有配置窗口】：滚动区内含两个区段——
+--      · 手动绑定列表：每行 = 图标 + 光环输入框 + 技能输入框 + 状态 + 删除（单行紧凑布局，
+--        无字段标题；追踪单位自动识别，主文件对每条绑定同时挂 player/target 两路）。
+--      · 内置预设列表（PresetData.lua，按当前职业过滤）：每行 = 启用复选框 + 图标 + 名称，
+--        逐条启停（专精级存档，缺省启用）。
 --
 -- 战斗行为：战斗中配置窗口直接隐藏，战斗结束若此前是打开状态则自动恢复；
 -- 战斗中不响应 /babu 与占位页按钮。
@@ -20,75 +21,46 @@ local L = B.L
 
 local PANEL_W = 680
 local ROW_W   = PANEL_W - 44
-local ROW_H   = 56
+local ROW_H   = 30        -- 手动绑定行：单行紧凑
+local PRESET_ROW_H = 28   -- 预设行
 
-local VISIBLE_ROWS = 7
+local VISIBLE_ROWS = 12
 local LIST_H = VISIBLE_ROWS * ROW_H
 
--- 行内第二行控件的横坐标（相对 row 左侧）与宽度
-local X_AURA,  W_AURA  = 48, 140
-local X_UNIT,  W_UNIT  = 204, 92
-local X_SPELL, W_SPELL = 330, 180
-local X_DEL,   W_DEL   = 560, 56
-
-local ADD_ROW_H = 46   -- 底部「添加绑定」按钮区高度
+-- 行内控件横坐标（相对 row 左侧；单行布局，无字段标题）
+local X_AURA,  W_AURA  = 32, 150
+local X_SPELL, W_SPELL = 190, 150
+local X_STATUS          = 348
+local ADD_ROW_H = 36    -- 「添加绑定」按钮区高度
 
 -- 暴雪设置分类名 / 配置窗口标题：不本地化，固定用插件名（工作区约定）
 local ADDON_TITLE = "Easy Button Aura by Unit"
+
+-- 标题金色：与插件图标（金色 E 圆环）主色一致（直方图采样主峰值 #E8BC75）
+local GOLD_R, GOLD_G, GOLD_B = 0.910, 0.737, 0.459
 
 local STUB_W = 520
 
 local configFrame
 local rows = {}
+local presetRows = {}
 local refreshing = false
 
 -- =========================================================
 -- 小工具
 -- =========================================================
-local function AddTip(widget, text)
+local function AddTip(widget, textFn)
     local prevEnter = widget:GetScript("OnEnter")
     local prevLeave = widget:GetScript("OnLeave")
     widget:SetScript("OnEnter", function(self, ...)
         if prevEnter then prevEnter(self, ...) end
+        local text = type(textFn) == "function" and textFn() or textFn
+        if not text then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(text, 1, 1, 1, 1, true)
         GameTooltip:Show()
     end)
-    widget:SetScript("OnLeave", function(self, ...)
-        if prevLeave then prevLeave(self, ...) end
-        GameTooltip:Hide()
-    end)
-end
-
--- 下拉按钮的显示文字（不同版本方法名可能有差异，优先 SetText）
-local function SetDdText(dd, text)
-    if dd.SetText then
-        dd:SetText(text)
-    elseif dd.SetDefaultText then
-        dd:SetDefaultText(text)
-    end
-end
-
--- 追踪单位下拉：自身 / 目标
-local function CurUnit(index)
-    local list = B.GetList()
-    local cfg = list[index]
-    return (cfg and cfg.unit) or "player"
-end
-
-local function SetupUnitMenu(dd)
-    dd:SetupMenu(function(_, rootDescription)
-        local entries = { { key = "player", label = L("UNIT_PLAYER") }, { key = "target", label = L("UNIT_TARGET") } }
-        for _, e in ipairs(entries) do
-            rootDescription:CreateRadio(e.label, function()
-                return CurUnit(dd._index) == e.key
-            end, function()
-                if dd._index then
-                    B.UpdateBinding(dd._index, "unit", e.key)
-                end
-            end)
-        end
-    end)
+    widget:SetScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
 -- 提交「光环」输入框：名字 / ID 皆可；空 = 清除；解析失败 = 还原并提示
@@ -152,45 +124,27 @@ local function CommitSpellEdit(row)
 end
 
 -- =========================================================
--- 行控件
+-- 手动绑定行控件（单行：图标 + 光环输入框 + 技能输入框 + 状态 + 删除）
 -- =========================================================
 local function CreateRow(index)
     local row = CreateFrame("Frame", nil, configFrame.rows)
     row:SetSize(ROW_W, ROW_H)
     row:SetPoint("TOPLEFT", 0, -(index - 1) * ROW_H)
 
-    -- 第一行：图标 + 光环名 + 状态提示
+    -- 图标（悬停显示光环法术提示）
     row.icon = CreateFrame("Button", nil, row)
     row.icon:SetSize(20, 20)
-    row.icon:SetPoint("TOPLEFT", 6, -4)
+    row.icon:SetPoint("LEFT", 4, 0)
     row.icon.tex = row.icon:CreateTexture(nil, "ARTWORK")
     row.icon.tex:SetAllPoints()
-    row.icon:SetScript("OnEnter", function(self)
-        local id = self.spellID
-        if not id then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        if GameTooltip.SetSpellByID then
-            GameTooltip:SetSpellByID(id)
-        else
-            GameTooltip:SetText(B.GetSpellDisplayName(id))
-        end
-        GameTooltip:Show()
+    AddTip(row.icon, function()
+        return row.icon.spellID and B.GetSpellDisplayName(row.icon.spellID) or nil
     end)
-    row.icon:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    row.name:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
-    row.name:SetJustifyH("LEFT")
-
-    row.status = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.status:SetPoint("LEFT", row.name, "RIGHT", 10, 0)
-    row.status:SetJustifyH("LEFT")
-
-    -- 第二行：光环输入框 / 单位下拉 / 技能输入框 / 删除按钮
-    -- 统一底边（输入框 y=6、下拉 y=4、按钮 y=4），中心线一致 → 视觉对齐
+    -- 光环输入框
     row.auraEdit = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
     row.auraEdit:SetSize(W_AURA, 20)
-    row.auraEdit:SetPoint("BOTTOMLEFT", X_AURA, 6)
+    row.auraEdit:SetPoint("LEFT", X_AURA, 0)
     row.auraEdit:SetAutoFocus(false)
     row.auraEdit:SetMaxLetters(60)
     row.auraEdit:SetScript("OnEnterPressed", function() CommitAuraEdit(row) end)
@@ -205,19 +159,10 @@ local function CreateRow(index)
         row._committing = false
     end)
 
-    row.auraLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.auraLabel:SetPoint("RIGHT", row.auraEdit, "LEFT", -6, 0)
-    row.auraLabel:SetText(L("COL_AURA"))
-
-    row.unitDd = CreateFrame("DropdownButton", nil, row, "WowStyle1DropdownTemplate")
-    row.unitDd:SetSize(W_UNIT, 24)
-    row.unitDd:SetPoint("BOTTOMLEFT", X_UNIT, 4)
-    SetupUnitMenu(row.unitDd)
-    AddTip(row.unitDd, L("COL_UNIT"))
-
+    -- 技能输入框
     row.spellEdit = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
     row.spellEdit:SetSize(W_SPELL, 20)
-    row.spellEdit:SetPoint("BOTTOMLEFT", X_SPELL, 6)
+    row.spellEdit:SetPoint("LEFT", X_SPELL, 0)
     row.spellEdit:SetAutoFocus(false)
     row.spellEdit:SetMaxLetters(60)
     row.spellEdit:SetScript("OnEnterPressed", function() CommitSpellEdit(row) end)
@@ -232,13 +177,15 @@ local function CreateRow(index)
         row._committing = false
     end)
 
-    row.spellLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.spellLabel:SetPoint("RIGHT", row.spellEdit, "LEFT", -6, 0)
-    row.spellLabel:SetText(L("COL_SPELL"))
+    -- 状态提示（技能不在动作条上等）
+    row.status = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.status:SetPoint("LEFT", X_STATUS, 0)
+    row.status:SetJustifyH("LEFT")
 
+    -- 删除按钮
     row.delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-    row.delBtn:SetSize(W_DEL, 22)
-    row.delBtn:SetPoint("BOTTOMLEFT", X_DEL, 4)
+    row.delBtn:SetSize(48, 20)
+    row.delBtn:SetPoint("RIGHT", -4, 0)
     row.delBtn:SetText(L("DEL"))
     row.delBtn:SetScript("OnClick", function()
         if row.index then
@@ -254,7 +201,6 @@ local function UpdateRow(row, index, buttonMap)
     local cfg = list[index] or {}
 
     local auraName = cfg.auraID and B.GetSpellDisplayName(cfg.auraID) or ""
-    row.name:SetText(auraName)
     row.icon.spellID = cfg.auraID
     row.icon.tex:SetTexture(B.GetSpellIcon(cfg.auraID) or "Interface\\Icons\\INV_Misc_QuestionMark")
 
@@ -277,14 +223,90 @@ local function UpdateRow(row, index, buttonMap)
     else
         row.status:SetText("")
     end
-
-    row.unitDd._index = index
-    SetDdText(row.unitDd, (cfg.unit == "target") and L("UNIT_TARGET") or L("UNIT_PLAYER"))
 end
 
 -- =========================================================
--- 面板刷新
+-- 内置预设区（按当前职业过滤；复选框启停）
 -- =========================================================
+-- 预设行显示文本：光环名（数组取首个 + 计数）→ 技能名；附魔 = 附魔名 → 技能名
+local function PresetAuraNames(e)
+    local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
+    local names = {}
+    for _, id in ipairs(ids) do
+        names[#names + 1] = B.GetSpellDisplayName(id)
+    end
+    return names
+end
+
+local function PresetDisplayText(e)
+    local spellName = B.GetSpellDisplayName(e.actionSpellID)
+    if e.enchantID then
+        return (e.enchantName or tostring(e.enchantID)) .. " → " .. spellName
+    end
+    local names = PresetAuraNames(e)
+    if #names > 1 then
+        return (names[1] or "?") .. " (+" .. (#names - 1) .. ") → " .. spellName
+    end
+    return (names[1] or "?") .. " → " .. spellName
+end
+
+local function CreatePresetRows()
+    local list = B.GetClassPresetList()
+    for i, item in ipairs(list) do
+        local e = item.e
+        local row = CreateFrame("Frame", nil, configFrame.rows)
+        row:SetSize(ROW_W, PRESET_ROW_H)
+        row.key = item.key
+
+        row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        row.check:SetSize(22, 22)
+        row.check:SetPoint("LEFT", 2, 0)
+        row.check:SetHitRectInsets(0, 0, 0, 0)
+        row.check:SetScript("OnClick", function(self)
+            B.SetPresetEnabled(row.key, self:GetChecked() and true or false)
+        end)
+
+        row.iconTex = row:CreateTexture(nil, "ARTWORK")
+        row.iconTex:SetSize(18, 18)
+        row.iconTex:SetPoint("LEFT", 30, 0)
+
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.text:SetPoint("LEFT", row.iconTex, "RIGHT", 8, 0)
+        row.text:SetJustifyH("LEFT")
+
+        AddTip(row.check, function()
+            local names = e.enchantID and { e.enchantName or tostring(e.enchantID) } or PresetAuraNames(e)
+            return table.concat(names, ", ") .. " → " .. B.GetSpellDisplayName(e.actionSpellID)
+        end)
+        AddTip(row.iconTex, function()
+            local names = e.enchantID and { e.enchantName or tostring(e.enchantID) } or PresetAuraNames(e)
+            return table.concat(names, ", ") .. " → " .. B.GetSpellDisplayName(e.actionSpellID)
+        end)
+
+        row.iconTex:SetTexture(B.GetSpellIcon(e.actionSpellID)
+            or (not e.enchantID and B.GetSpellIcon(type(e.auraSpellID) == "table" and e.auraSpellID[1] or e.auraSpellID))
+            or "Interface\\Icons\\INV_Misc_QuestionMark")
+        row.text:SetText(PresetDisplayText(e))
+
+        presetRows[#presetRows + 1] = row
+    end
+end
+
+-- =========================================================
+-- 面板刷新 + 滚动区内部布局
+-- =========================================================
+-- 手动绑定行数变化时，重排滚动区内的静态区段（添加按钮 / 预设标题 / 预设行）
+local function LayoutScrollContent(count)
+    local y = count * ROW_H
+    configFrame.addBtn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(y + 4))
+    configFrame.presetHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -(y + ADD_ROW_H))
+    local py = y + ADD_ROW_H + 26
+    for i, pr in ipairs(presetRows) do
+        pr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(py + (i - 1) * PRESET_ROW_H))
+    end
+    return py + #presetRows * PRESET_ROW_H + 8
+end
+
 local function DoRefresh()
     if not configFrame then return end
 
@@ -314,19 +336,21 @@ local function DoRefresh()
         rows[i]:Hide()
     end
 
-    -- 空列表：隐藏滚动区（其自带底板会盖住提示文字），只显示提示
-    local empty = (count == 0)
-    configFrame.emptyList:SetShown(empty)
-    configFrame.scroll:SetShown(not empty)
-    configFrame.rows:SetSize(ROW_W, math.max(count, 1) * ROW_H)
+    -- 预设复选框状态（随专精切换刷新）
+    for _, pr in ipairs(presetRows) do
+        pr.check:SetChecked(B.IsPresetEnabled(pr.key))
+    end
+
+    local totalH = LayoutScrollContent(count)
+    configFrame.rows:SetSize(ROW_W, math.max(totalH, LIST_H))
     if configFrame.scroll.UpdateScrollChildRect then
         pcall(configFrame.scroll.UpdateScrollChildRect, configFrame.scroll)
     end
 
-    -- 窗口高度 = 顶部实际几何 + 固定列表高度 + 添加按钮区 + 底部留白
+    -- 窗口高度 = 顶部实际几何 + 固定列表高度 + 底部留白
     local pTop, rTop = configFrame:GetTop(), configFrame.scroll:GetTop()
     local headerH = (pTop and rTop and pTop > rTop) and (pTop - rTop) or 130
-    configFrame:SetSize(PANEL_W, headerH + LIST_H + ADD_ROW_H + 20)
+    configFrame:SetSize(PANEL_W, headerH + LIST_H + 20)
 end
 
 -- ⚠️ refreshing 守卫必须无条件复位：刷新中途一旦抛错，若不复位，之后所有刷新都会被挡掉
@@ -342,7 +366,7 @@ end
 -- =========================================================
 local function BuildConfigFrame()
     configFrame = CreateFrame("Frame", "EasyButtonAuraByUnitConfigFrame", UIParent, "BasicFrameTemplateWithInset")
-    configFrame:SetSize(PANEL_W, 380)
+    configFrame:SetSize(PANEL_W, 520)
     configFrame:SetPoint("TOP", UIParent, "TOP", 0, -120)
     configFrame:SetMovable(true)
     configFrame:EnableMouse(true)
@@ -381,13 +405,6 @@ local function BuildConfigFrame()
     end)
     configFrame.enableCheck:SetChecked(B.IsEnabled())
 
-    configFrame.emptyList = configFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-    configFrame.emptyList:SetPoint("TOPLEFT", configFrame.desc, "BOTTOMLEFT", 0, -12)
-    configFrame.emptyList:SetWidth(PANEL_W - 40)
-    configFrame.emptyList:SetJustifyH("LEFT")
-    configFrame.emptyList:SetText(L("EMPTY_HINT"))
-    configFrame.emptyList:Hide()
-
     -- 列表区：固定高度的滚动区（行数超过可见行数时出现滚动条，支持鼠标滚轮）
     configFrame.scroll = CreateFrame("ScrollFrame", "EasyButtonAuraByUnitConfigScroll", configFrame, "UIPanelScrollFrameTemplate")
     configFrame.scroll:SetPoint("TOPLEFT", configFrame.desc, "BOTTOMLEFT", 8, -14)
@@ -416,15 +433,21 @@ local function BuildConfigFrame()
         bar:SetPoint("BOTTOMRIGHT", configFrame.scroll, "BOTTOMRIGHT", -2, 14)
     end
 
-    -- 底部「添加绑定」按钮：追加一条空绑定并刷新
-    configFrame.addBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
+    -- 底部「添加绑定」按钮：追加一条空绑定并刷新（Y 位置由 LayoutScrollContent 动态排）
+    configFrame.addBtn = CreateFrame("Button", nil, configFrame.rows, "UIPanelButtonTemplate")
     configFrame.addBtn:SetSize(120, 24)
-    configFrame.addBtn:SetPoint("TOPLEFT", configFrame.scroll, "BOTTOMLEFT", 8, -10)
     configFrame.addBtn:SetText(L("ADD"))
     configFrame.addBtn:SetScript("OnClick", function()
         if InCombatLockdown() then return end
         B.AddBinding()
     end)
+
+    -- 预设区标题（在滚动区内、添加按钮之下）
+    configFrame.presetHeader = configFrame.rows:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    configFrame.presetHeader:SetText(L("PRESET_HEADER"))
+
+    -- 预设行（按当前职业一次性构建；职业不会随会话变化）
+    CreatePresetRows()
 
     configFrame:SetScript("OnShow", function()
         B.RefreshPanel()
@@ -465,7 +488,7 @@ function B.OnCombatChanged(inCombat)
 end
 
 -- =========================================================
--- 暴雪插件设置里的占位页（提示 + 按钮）
+-- 暴雪插件设置里的占位页（标题 + 提示 + 按钮）
 -- =========================================================
 local function BuildBlizzardStub()
     local stub = CreateFrame("Frame")
@@ -476,13 +499,15 @@ local function BuildBlizzardStub()
     stub.OnDefault = function() end
     stub.OnRefresh = function() end
 
-    -- 页面顶部标题（英文插件名，Chattynator 风格）：左侧分类树有名字，页内自身也要有
+    -- 页面顶部标题（英文插件名，金色大字——与插件图标同色系）
     local title = stub:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     title:SetPoint("TOP", stub, "TOP", 0, -18)
+    title:SetFont(STANDARD_TEXT_FONT, 22, "")
+    title:SetTextColor(GOLD_R, GOLD_G, GOLD_B)
     title:SetText(ADDON_TITLE)
 
     local hint = stub:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    hint:SetPoint("TOP", stub, "TOP", 0, -58)
+    hint:SetPoint("TOP", stub, "TOP", 0, -64)
     hint:SetWidth(STUB_W - 40)
     hint:SetJustifyH("CENTER")
     hint:SetText(L("STUB_HINT"))

@@ -2,9 +2,12 @@
 -- Easy Button Aura by Unit
 --
 -- 剥离自上游 ActionbarEnhanced/Preset.lua（技能栏光环显示），并按用户需求重设计：
---   · 移除全部预设：光环 ID → 技能 ID 全部由玩家在配置窗口（/babu）手动绑定，按专精存档。
---   · 例外：武器临时附魔（火舌/风怒/裁决仪式等）保留内置预设（共 6 条，按职业自动启用），
---     走 GetWeaponEnchantInfo 战斗安全通道，独立覆盖层 + 1 秒 ticker（不参与合并，两把武器独立计时）。
+--   · 手动绑定：光环 ID → 技能 ID 由玩家在配置窗口（/babu）绑定，按专精存档。
+--     绑定不选追踪单位——每条绑定自动同时挂 player(HELPFUL|PLAYER) 与 target(HARMFUL|PLAYER)
+--     两路容器，哪路命中显示哪路（另一路自然无匹配，代价只是每条绑定多一个容器）。
+--   · 内置预设：上游 PresetData 全量移植（见 PresetData.lua，按职业过滤），配置窗口「预设」区
+--     逐条启用/禁用（专精级覆盖，缺省启用）。含武器临时附魔（火舌/风怒/裁决仪式等，
+--     GetWeaponEnchantInfo 战斗安全通道，独立覆盖层 + 1 秒 ticker，不参与合并，两把武器独立计时）。
 --   · 光环渲染沿用上游 12.1 官方安全通道【AuraContainer】（暴雪渲染层）：
 --     addon 零读取光环数据、零 secret/taint 问题；倒计时 / 层数 / 显隐全部由暴雪驱动。
 --   · 合并规则：多条绑定指向同一单位 + 同一技能时，运行时合并成一个 includeSpellIDs 集合、
@@ -13,7 +16,7 @@
 --     挂在暴雪创建的 AuraButton 上（initializeFrame 回调允许），随按钮显隐 → 不需要读任何
 --     光环存在性信号（AuraButton:IsShown() 是 secret，我们根本不读它）；独立纹理层，
 --     不碰 icon（与 easyButtonColor 零冲突）、不依赖各 UI 边框结构。
---   · 配色：自身增益 = 绿（数字 / 柔光），敌对目标减益 = 橙红数字 / 红柔光。
+--   · 配色：自身增益 = 绿（数字 / 柔光），敌对目标减益 = 纯红。
 --   · 全局开关 = 角色级；绑定 = 专精级。全静默（无 print / 无弹窗）。
 --
 -- 12.x secret 值红线：一律 issecretvalue 判定，不比较 secret 数值，外部数据 pcall 兜底。
@@ -30,58 +33,49 @@ local LOCALES = {
         SPEC_LABEL        = "Current Specialization",
         SPEC_UNKNOWN      = "Unknown",
         ENABLE            = "Enabled",
-        PAGE_DESC         = "Manually bind aura IDs to action bar buttons: the button shows the aura's remaining time and stacks. Weapon enchants (Flametongue, Windfury, etc.) are built-in presets and need no setup.",
+        PAGE_DESC         = "Bind aura IDs to action bar buttons below (unit is detected automatically), or toggle the built-in presets. Buttons show the aura's remaining time and stacks.",
         COL_AURA          = "Aura",
-        COL_UNIT          = "Unit",
         COL_SPELL         = "Spell",
-        UNIT_PLAYER       = "Self",
-        UNIT_TARGET       = "Target",
         ADD               = "Add Binding",
-        EMPTY_HINT        = "No bindings yet. Click \"Add Binding\" below to create one.",
         DEL               = "Delete",
         ERR_INVALID       = "Spell not found",
         ERR_NO_AURA       = "Invalid aura",
         STATUS_NOT_ON_BAR = "not on action bars",
         OPEN_OPTIONS      = "Open Options",
         STUB_HINT         = "Click the button below, or type /babu, to open the configuration window.",
+        PRESET_HEADER     = "Built-in Presets (per-spec toggle)",
     },
     zhCN = {
         SPEC_LABEL        = "当前专精",
         SPEC_UNKNOWN      = "未知",
         ENABLE            = "启用",
-        PAGE_DESC         = "把光环 ID 手动绑定到动作条按钮：按钮上显示光环剩余时间与层数。武器附魔（火舌/风怒/裁决仪式等）走内置预设自动显示，无需配置。",
+        PAGE_DESC         = "在下方把光环 ID 手动绑定到动作条按钮（自动识别自身/目标），或在预设列表中启用/禁用内置项。按钮上会显示光环剩余时间与层数。",
         COL_AURA          = "光环",
-        COL_UNIT          = "单位",
         COL_SPELL         = "技能",
-        UNIT_PLAYER       = "自身",
-        UNIT_TARGET       = "目标",
         ADD               = "添加绑定",
-        EMPTY_HINT        = "还没有绑定。点击下方「添加绑定」创建一条。",
         DEL               = "删除",
         ERR_INVALID       = "未找到该法术",
         ERR_NO_AURA       = "光环 ID 无效",
         STATUS_NOT_ON_BAR = "不在动作条上",
         OPEN_OPTIONS      = "打开配置",
         STUB_HINT         = "点击按钮，或者输入 /babu 打开配置窗口。",
+        PRESET_HEADER     = "内置预设（按专精启停）",
     },
     zhTW = {
         SPEC_LABEL        = "目前專精",
         SPEC_UNKNOWN      = "未知",
         ENABLE            = "啟用",
-        PAGE_DESC         = "把光環 ID 手動綁定到快捷列按鈕：按鈕上顯示光環剩餘時間與堆疊數量。武器附魔（火舌／風怒／裁決儀式等）走內建預設自動顯示，無需設定。",
+        PAGE_DESC         = "在下方把手動綁定光環 ID 到快捷列按鈕（自動偵測自身／目標），或在預設列表中啟用／停用內建項目。按鈕上會顯示光環剩餘時間與堆疊數量。",
         COL_AURA          = "光環",
-        COL_UNIT          = "單位",
         COL_SPELL         = "技能",
-        UNIT_PLAYER       = "自身",
-        UNIT_TARGET       = "目標",
         ADD               = "新增綁定",
-        EMPTY_HINT        = "還沒有綁定。點擊下方「新增綁定」開始。",
         DEL               = "刪除",
         ERR_INVALID       = "找不到該法術",
         ERR_NO_AURA       = "光環 ID 無效",
         STATUS_NOT_ON_BAR = "不在快捷列上",
         OPEN_OPTIONS      = "開啟設定",
         STUB_HINT         = "點擊按鈕，或者輸入 /babu 開啟設定視窗。",
+        PRESET_HEADER     = "內建預設（按專精啟停）",
     },
 }
 
@@ -102,7 +96,7 @@ B.Style = {
     FONT_SIZE        = 16,
     OUTLINE          = "THICKOUTLINE",
     TIME_COLOR_SELF  = { 0.20, 1.00, 0.20 },                    -- 倒计时（自身增益 / 武器附魔）：绿
-    TIME_COLOR_ENEMY = { 1.00, 0.50, 0.10 },                    -- 倒计时（敌对目标减益）：橙红
+    TIME_COLOR_ENEMY = { 1.00, 0.00, 0.00 },                    -- 倒计时（敌对目标减益）：纯红
     STACK_COLOR      = { 0x3F / 255, 0xC7 / 255, 0xEB / 255 },  -- 层数：#3FC7EB
     GLOW_SELF        = { 0.00, 0.70, 0.00 },                    -- 柔光（自身）：绿（CDMButtonAuras 同款）
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
@@ -170,10 +164,12 @@ function B.GetSpellIcon(spellID)
 end
 
 -- =========================================================
--- 存档：全局开关（角色级）+ 绑定列表（按专精）
+-- 存档：全局开关（角色级）+ 绑定列表 / 预设启停（按专精）
 -- easyButtonAuraByUnitDB.enabled = true|false          （角色级，所有专精共用）
--- easyButtonAuraByUnitDB.specs[specID] = { list = { cfg... } }
---   cfg = { auraID = <光环 spellID>, unit = "player"|"target", bindSpell = <目标技能 spellID> }
+-- easyButtonAuraByUnitDB.specs[specID] = { list = { cfg... }, presets = { [key]=false... } }
+--   cfg = { auraID = <光环 spellID>, bindSpell = <目标技能 spellID> }
+--     （不存 unit：运行时自动同时挂 player / target 两路，见 RebuildGroups）
+--   presets：预设禁用覆盖表——只记被关掉的条目（key = PresetData.lua 中的序号），缺省 = 启用
 -- specID 取自 GetSpecializationInfo(GetSpecialization())，拿不到时用 0（通用槽）。
 -- =========================================================
 local function GetCurrentSpecID()
@@ -195,7 +191,6 @@ function B.InitStorage()
         easyButtonAuraByUnitDB.specs = { [0] = { list = {} } }
     end
 end
-
 -- 全局开关（角色级；关闭 = 撤下全部容器与覆盖层）
 function B.IsEnabled()
     return easyButtonAuraByUnitDB and easyButtonAuraByUnitDB.enabled ~= false
@@ -207,9 +202,10 @@ function B.SelectSpec(specID)
     specID = specID or GetCurrentSpecID()
     local specs = easyButtonAuraByUnitDB.specs
     if not specs[specID] then
-        specs[specID] = { list = {} }
+        specs[specID] = { list = {}, presets = {} }
     end
     specs[specID].list = specs[specID].list or {}
+    specs[specID].presets = specs[specID].presets or {}
     B.db = specs[specID]
     B.currentSpecID = specID
 end
@@ -223,7 +219,7 @@ end
 function B.AddBinding()
     B.InitStorage()
     local list = B.GetList()
-    list[#list + 1] = { unit = "player" }
+    list[#list + 1] = {}
     B.NotifyBindingsChanged()
     return #list
 end
@@ -236,7 +232,7 @@ function B.DeleteBinding(index)
     end
 end
 
--- 更新某条绑定的字段（auraID / unit / bindSpell）
+-- 更新某条绑定的字段（auraID / bindSpell）
 function B.UpdateBinding(index, key, value)
     local list = B.GetList()
     local cfg = list[index]
@@ -244,6 +240,38 @@ function B.UpdateBinding(index, key, value)
         cfg[key] = value
         B.NotifyBindingsChanged()
     end
+end
+
+-- =========================================================
+-- 预设启停（专精级覆盖；只记禁用条目，缺省 = 启用）
+-- =========================================================
+function B.IsPresetEnabled(key)
+    B.InitStorage()
+    local db = easyButtonAuraByUnitDB.specs[B.currentSpecID or 0]
+    return not (db and db.presets and db.presets[key] == false)
+end
+
+function B.SetPresetEnabled(key, enabled)
+    B.InitStorage()
+    local db = easyButtonAuraByUnitDB.specs[B.currentSpecID or 0]
+    if not db then return end
+    db.presets = db.presets or {}
+    -- 启用 = 清除覆盖（回到缺省启用）；禁用 = 记 false。
+    -- 不写 true 值：预设表日后扩充/调整顺序时，旧的覆盖记录不会错位生效。
+    db.presets[key] = enabled and nil or false
+    B.NotifyBindingsChanged()
+end
+
+-- 当前职业可用的预设列表（含 class=nil 的种族预设）：{ { key = 序号, e = 条目 } }
+function B.GetClassPresetList()
+    local _, classToken = UnitClass("player")
+    local out = {}
+    for i, e in ipairs(B.PRESET_DATA or {}) do
+        if not e.class or e.class == classToken then
+            out[#out + 1] = { key = i, e = e }
+        end
+    end
+    return out
 end
 
 function B.GetCurrentSpecName()
@@ -423,12 +451,14 @@ end
 
 -- 为合并组创建 AuraContainer（每组一个容器，独立定位到各自按钮）。
 -- 光环过滤用 includeSpellIDs（按 auraData.spellId 精确匹配光环 ID）。
--- 过滤串：player → HELPFUL|PLAYER（只看自己施放的增益）；
---         target → HARMFUL|PLAYER（只看自己施放到敌对目标身上的减益，上游烈焰震击同款）。
+-- 过滤串 p.filter 由 RebuildGroups 决定：
+--   手动绑定 player 路 → HELPFUL|PLAYER（只看自己施放的增益）；
+--   手动绑定 target 路 → HARMFUL|PLAYER（只看自己施放到敌对目标身上的减益，上游烈焰震击同款）；
+--   预设 → 沿用上游语义（缺省 HELPFUL，条目可显式覆盖）。
 local function InitAuraGroup(p)
     if p.container then return true end
     if p._initFailed then return false end  -- 上次战斗中创建失败 → 等脱战重试
-    local filter = (p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
+    local filter = p.filter or ((p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER")
 
     local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
     container:SetFrameStrata("HIGH")
@@ -519,24 +549,11 @@ local function UpdateAuraGroup(p)
 end
 
 -- =========================================================
--- 类型 B：武器临时附魔（内置预设，按职业自动启用）
+-- 类型 B：武器临时附魔（预设数据见 PresetData.lua，走 enchantID 通道）
 --   走 item enchant 通道（非 unit aura），12.1 战斗中也能检测（GetWeaponEnchantInfo 战斗安全）。
 --   主路径 GetWeaponEnchantInfo()（返回 enchantID + 剩余毫秒），兜底
 --   C_PaperDollInfo.GetTemporaryEnchantmentInfo（12.1 官方替代 API）。
 -- =========================================================
-local WEAPON_ENCHANT_PRESETS = {
-    SHAMAN = {
-        { enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" },          -- 火舌武器
-        { enchantID = 5401, actionSpellID = 33757,  enchantName = "Windfury" },             -- 风怒武器
-        { enchantID = 6498, actionSpellID = 382021, enchantName = "Earthliving Weapon" },   -- 大地生命武器
-        { enchantID = 7528, actionSpellID = 457481, enchantName = "Tidecaller's Guard" },   -- 唤潮者护卫
-    },
-    PALADIN = {
-        { enchantID = 7144, actionSpellID = 433583, enchantName = "Ritual of Judgment" },       -- 裁决仪式
-        { enchantID = 7143, actionSpellID = 433568, enchantName = "Ritual of Sanctification" }, -- 圣化仪式
-    },
-}
-
 local function GetWeaponEnchantExpiration(enchantID)
     -- 主路径：旧 API（上游实测 12.1 仍可用）
     local ok, hasMain, mainExp, _, mainID, hasOff, offExp, _, offID = pcall(GetWeaponEnchantInfo)
@@ -660,9 +677,15 @@ local function RefreshEnchants()
 end
 
 -- =========================================================
--- 合并构建：绑定列表 → 运行时组（同单位+同技能的多条绑定合并共用一个容器）
+-- 合并构建：手动绑定 + 内置预设 → 运行时组
+--   · 手动绑定：不选单位 → 每条自动展开成 player(HELPFUL|PLAYER) 与 target(HARMFUL|PLAYER)
+--     两个组；哪路命中显示哪路（另一路自然无匹配，代价只是每条绑定多一个容器）。
+--   · 预设（PresetData.lua，按职业过滤 + 专精级启停）：沿用上游过滤语义
+--     （缺省 unit="player" + HELPFUL；目标减益条目自带 HARMFUL|PLAYER）。
+--   · 合并规则：unit + filter + 技能 相同的多条来源共用一个容器
+--     （多光环任一命中即显示，也避免多容器叠在同一按钮上）。
 -- =========================================================
-B.groups = {}    -- 类型 A：{ unit, actionSpellID, auraIDs = {[id]=true}, container, ... }
+B.groups = {}    -- 类型 A：{ unit, filter, actionSpellID, auraIDs = {[id]=true}, container, ... }
 B.enchants = {}  -- 类型 B：{ enchantID, actionSpellID, overlay, cd, ... }
 
 local function RebuildGroups()
@@ -682,36 +705,49 @@ local function RebuildGroups()
     wipe(B.enchants)
     if not B.IsEnabled() then return end
 
-    -- 光环绑定：按 unit + bindSpell 合并
-    local merged = {}
-    local order = {}
-    for _, cfg in ipairs(B.GetList()) do
-        if cfg.auraID and cfg.bindSpell then
-            local key = tostring(cfg.unit or "player") .. ":" .. tostring(cfg.bindSpell)
-            local g = merged[key]
-            if not g then
-                g = { unit = cfg.unit or "player", actionSpellID = cfg.bindSpell, auraIDs = {} }
-                merged[key] = g
-                order[#order + 1] = g
-            end
-            g.auraIDs[cfg.auraID] = true
+    local merged, order = {}, {}
+    local function addGroup(unit, filter, actionSpellID, auraID)
+        local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionSpellID)
+        local g = merged[key]
+        if not g then
+            g = { unit = unit, filter = filter, actionSpellID = actionSpellID, auraIDs = {} }
+            merged[key] = g
+            order[#order + 1] = g
         end
-    end
-    for _, g in ipairs(order) do
-        B.groups[#B.groups + 1] = g
+        g.auraIDs[auraID] = true
     end
 
-    -- 武器附魔内置预设：按当前职业过滤
-    local _, classToken = UnitClass("player")
-    local presets = classToken and WEAPON_ENCHANT_PRESETS[classToken]
-    if presets then
-        for _, e in ipairs(presets) do
-            B.enchants[#B.enchants + 1] = {
-                enchantID = e.enchantID,
-                actionSpellID = e.actionSpellID,
-                enchantName = e.enchantName,
-            }
+    -- 手动绑定：双通道自动展开
+    for _, cfg in ipairs(B.GetList()) do
+        if cfg.auraID and cfg.bindSpell then
+            addGroup("player", "HELPFUL|PLAYER", cfg.bindSpell, cfg.auraID)
+            addGroup("target", "HARMFUL|PLAYER", cfg.bindSpell, cfg.auraID)
         end
+    end
+
+    -- 内置预设：按当前职业过滤 + 逐条启停（key = PresetData.lua 中的序号）
+    local _, classToken = UnitClass("player")
+    for key, e in ipairs(B.PRESET_DATA or {}) do
+        if (not e.class or e.class == classToken) and B.IsPresetEnabled(key) then
+            if e.enchantID then
+                B.enchants[#B.enchants + 1] = {
+                    enchantID = e.enchantID,
+                    actionSpellID = e.actionSpellID,
+                    enchantName = e.enchantName,
+                }
+            else
+                local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
+                local unit = e.unit or "player"
+                local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
+                for _, id in ipairs(ids) do
+                    addGroup(unit, filter, e.actionSpellID, id)
+                end
+            end
+        end
+    end
+
+    for _, g in ipairs(order) do
+        B.groups[#B.groups + 1] = g
     end
 end
 
