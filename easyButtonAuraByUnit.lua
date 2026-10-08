@@ -37,7 +37,8 @@ local LOCALES = {
         SECTION_LEARNED   = "Auto-Learned (out-of-combat scan)",
         LEARN_ENABLE      = "Auto-learn",
         LEARN_CLEAR       = "Clear",
-        LEARN_TIP         = "While out of combat, scans your own timed buffs and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
+        LEARNED_TARGET_TAG = " (target)",
+        LEARN_TIP         = "While out of combat, scans your own timed buffs and debuffs (and your debuffs on a hostile target) and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
         COL_AURA          = "Aura",
         COL_SPELL_BIND    = "Bind Spell",
         COL_SPELL         = "Spell",
@@ -58,7 +59,8 @@ local LOCALES = {
         SECTION_LEARNED   = "自动学习（脱战扫描）",
         LEARN_ENABLE      = "自动学习",
         LEARN_CLEAR       = "清空",
-        LEARN_TIP         = "脱战时扫描自身增益光环，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；可随时清空或整体关闭。",
+        LEARNED_TARGET_TAG = "（目标）",
+        LEARN_TIP         = "脱战时扫描自身增益/减益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；可随时清空或整体关闭。",
         COL_AURA          = "光环",
         COL_SPELL_BIND    = "绑定技能",
         COL_SPELL         = "技能",
@@ -79,7 +81,8 @@ local LOCALES = {
         SECTION_LEARNED   = "自動學習（脫戰掃描）",
         LEARN_ENABLE      = "自動學習",
         LEARN_CLEAR       = "清空",
-        LEARN_TIP         = "脫戰時掃描自身增益光環，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；可隨時清空或整體關閉。",
+        LEARNED_TARGET_TAG = "（目標）",
+        LEARN_TIP         = "脫戰時掃描自身增益／減益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；可隨時清空或整體關閉。",
         COL_AURA          = "光環",
         COL_SPELL_BIND    = "綁定技能",
         COL_SPELL         = "技能",
@@ -186,9 +189,10 @@ end
 --     （不存 unit：运行时自动同时挂 player / target 两路，见 RebuildGroups）
 --   presets：预设禁用覆盖表——只记被关掉的条目（key = PresetData.lua 中的序号），缺省 = 启用
 -- easyButtonAuraByUnitDB.learnEnabled = true|false     （角色级；自动学习总开关）
--- easyButtonAuraByUnitDB.learned = { { auraID=..., actionSpellID=..., disabled=bool }... }
---   自动学习表：脱战扫描自身增益 → 匹配动作条同名技能 自动生成的绑定（角色级通用一份，
---   不分专精——学的都是本职业技能）。每条自带 disabled 标记，可单独停用。
+-- easyButtonAuraByUnitDB.learned = { { auraID=..., actionSpellID=..., unit=..., disabled=bool }... }
+--   自动学习表：脱战扫描光环 → 匹配动作条同名技能 自动生成的绑定（角色级通用一份，
+--   不分专精——学的都是本职业技能）。unit = "player"（自身增益/自伤减益）或
+--   "target"（敌对目标身上我方减益），缺省 player。每条自带 disabled 标记，可单独停用。
 -- specID 取自 GetSpecializationInfo(GetSpecialization())，拿不到时用 0（通用槽）。
 -- =========================================================
 local function GetCurrentSpecID()
@@ -430,15 +434,31 @@ function B.BuildSpellButtonMap()
 end
 
 -- =========================================================
--- 自动学习：脱战扫描自身增益 → 匹配动作条技能 → 存入 learned 表
+-- 自动学习：脱战扫描光环 → 匹配动作条技能 → 存入 learned 表
 --   · 战斗红线：入口先查 InCombatLockdown()，战斗中绝不扫描（受限场景光环数据是 secret，
 --     脱战后才是明文）；扫到的 spellID 再过一道 issecretvalue 双保险。
---   · 只学「自己施放的、有时限的、动作条上存在同名/同ID技能」的自身增益
---     （sourceUnit=player 过滤触发品/食物等外来 buff；expirationTime>0 过滤形态/常驻光环）。
---   · 敌对目标减益不学：出现敌方 debuff 基本等于已进战斗（扫描窗关闭），学不到也扫不了。
---   · 与手动绑定 / 内置预设去重（同 auraID 不重复学），上限 64 条防膨胀。
+--   · 扫描源：自身增益 + 自身减益（自伤类）+ 敌对目标身上的我方减益
+--     （目标 debuff 多在战斗中挂上，脱战后残留时间窗正好可扫——用户确认纳入）。
+--   · 学习条件：有时限（expirationTime>0，滤形态/常驻）+ 我自己施放的（sourceUnit=player）
+--     + 动作条上存在同名/同ID技能 + 与手动/预设/已学去重（同一光环 ID 只活在一张表里，
+--     手动 > 预设 > 学习，所以三者不会冲突重复显示）。上限 64 条。
+--   · 扫描时机：登录+5s、脱战+1s、脱战期间光环变化（UNIT_AURA 防抖 2s——覆盖补 buff）。
 -- =========================================================
 local LEARN_MAX = 64
+
+-- 学习源：needHostileTarget = 只在当前存在敌对目标时扫（target 通道）
+local LEARN_SOURCES = {
+    { unit = "player", filter = "HELPFUL" },
+    { unit = "player", filter = "HARMFUL" },
+    { unit = "target", filter = "HARMFUL", needHostileTarget = true },
+}
+
+local function HasHostileTarget()
+    local okE, exists = pcall(UnitExists, "target")
+    if not (okE and exists and exists ~= false) then return false end
+    local okF, friendly = pcall(UnitIsFriend, "player", "target")
+    return not (okF and friendly and friendly ~= false)
+end
 
 local function LearnAlreadyCovered(auraID, seen)
     if seen[auraID] then return true end
@@ -470,30 +490,40 @@ local function ScanLearnableAuras()
 
     local buttonMap = B.BuildSpellButtonMap()
     local added = false
-    local index = 1
-    while #learned < LEARN_MAX do
-        local ok, data = pcall(C_UnitAuras.GetAuraDataByIndex, "player", index, "HELPFUL")
-        index = index + 1
-        if not ok or not data then break end
 
-        local spellID = data.spellId
-        if spellID and not IsSecret(spellID)
-            and data.sourceUnit == "player"                     -- 只学自己施放的
-            and data.expirationTime and data.expirationTime > 0 -- 只学有时限的（过滤形态/常驻）
-            and not LearnAlreadyCovered(spellID, seen) then
-            -- 匹配动作条技能：优先同 ID，退而求其次按名字找（命中不同 ID 的按钮也算）
-            local actionSpellID = buttonMap[spellID]
-            if not actionSpellID and data.name then
-                local btn = FindActionButtonForSpellName(data.name)
-                if btn and btn.action ~= nil then
-                    local _, aid = pcall(GetActionInfo, btn.action)
-                    if aid and aid > 0 and not IsSecret(aid) then actionSpellID = aid end
+    for _, src in ipairs(LEARN_SOURCES) do
+        if #learned >= LEARN_MAX then break end
+        if not src.needHostileTarget or HasHostileTarget() then
+            local index = 1
+            while #learned < LEARN_MAX do
+                local ok, data = pcall(C_UnitAuras.GetAuraDataByIndex, src.unit, index, src.filter)
+                index = index + 1
+                if not ok or not data then break end
+
+                local spellID = data.spellId
+                if spellID and not IsSecret(spellID)
+                    and data.sourceUnit == "player"                     -- 只学自己施放的
+                    and data.expirationTime and data.expirationTime > 0 -- 只学有时限的（过滤形态/常驻）
+                    and not LearnAlreadyCovered(spellID, seen) then
+                    -- 匹配动作条技能：优先同 ID，退而求其次按名字找（命中不同 ID 的按钮也算）
+                    local actionSpellID = buttonMap[spellID]
+                    if not actionSpellID and data.name then
+                        local btn = FindActionButtonForSpellName(data.name)
+                        if btn and btn.action ~= nil then
+                            local _, aid = pcall(GetActionInfo, btn.action)
+                            if aid and aid > 0 and not IsSecret(aid) then actionSpellID = aid end
+                        end
+                    end
+                    if actionSpellID and IsPlayerSpell(actionSpellID) then
+                        learned[#learned + 1] = {
+                            auraID = spellID,
+                            actionSpellID = actionSpellID,
+                            unit = src.unit,
+                        }
+                        seen[spellID] = true
+                        added = true
+                    end
                 end
-            end
-            if actionSpellID and IsPlayerSpell(actionSpellID) then
-                learned[#learned + 1] = { auraID = spellID, actionSpellID = actionSpellID }
-                seen[spellID] = true
-                added = true
             end
         end
     end
@@ -503,6 +533,17 @@ local function ScanLearnableAuras()
     end
 end
 B.ScanLearnableAuras = ScanLearnableAuras
+
+-- 自动学习防抖：脱战期间光环变化（补 buff、目标减益残留）都是学习窗口；
+-- 战斗中本事件高频触发也无妨——timer 到点后 ScanLearnableAuras 的战斗门禁直接返回。
+local learnScanTimer
+local function ScheduleLearnScan(delay)
+    if learnScanTimer then learnScanTimer:Cancel() end
+    learnScanTimer = C_Timer.NewTimer(delay or 2, function()
+        learnScanTimer = nil
+        pcall(ScanLearnableAuras)
+    end)
+end
 
 -- =========================================================
 -- 类型 A：unit aura —— 12.1 AuraContainer 暴雪渲染层（照搬上游，数据源换成手动绑定）
@@ -862,11 +903,14 @@ local function RebuildGroups()
         end
     end
 
-    -- 自动学习表（角色级；总开关 + 单条停用）
+    -- 自动学习表（角色级；总开关 + 单条停用）：player 条目走增益通道，
+    -- target 条目（敌对目标身上我方减益）走减益通道
     if B.IsLearnEnabled() then
         for _, e in ipairs(B.GetLearnedList()) do
             if not e.disabled and e.auraID and e.actionSpellID then
-                addGroup("player", "HELPFUL|PLAYER", e.actionSpellID, e.auraID)
+                local unit = e.unit or "player"
+                local filter = (unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
+                addGroup(unit, filter, e.actionSpellID, e.auraID)
             end
         end
     end
@@ -1015,6 +1059,9 @@ evFrame:SetScript("OnEvent", function(_, event)
             auraRefreshTimer = nil
             RefreshAll()
         end)
+        -- 自动学习：脱战期间光环变化 = 学习窗口（补 buff、目标减益残留）；
+        -- 防抖 2s；战斗中触发时 timer 到点后被 ScanLearnableAuras 的战斗门禁拦下
+        ScheduleLearnScan(2)
     elseif event == "PLAYER_TARGET_CHANGED" then
         -- AuraContainer 不监听目标切换，unit="target" 的容器需显式触发重新解析光环
         for _, p in ipairs(B.groups) do
@@ -1038,7 +1085,7 @@ evFrame:SetScript("OnEvent", function(_, event)
         RefreshAll()
         if B.OnCombatChanged then B.OnCombatChanged(false) end
         -- 脱战窗口正是自动学习的扫描窗（战斗中数据是 secret，绝不扫）；稍等动作条/光环稳定
-        C_Timer.After(1, function() pcall(ScanLearnableAuras) end)
+        ScheduleLearnScan(1)
     elseif event == "PLAYER_REGEN_DISABLED" then
         if B.OnCombatChanged then B.OnCombatChanged(true) end
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then

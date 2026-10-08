@@ -330,10 +330,17 @@ end
 local function LearnedDisplayText(e)
     local auraName = B.GetSpellDisplayName(e.auraID)
     local spellName = B.GetSpellDisplayName(e.actionSpellID)
+    local text
     if spellName and spellName ~= auraName and spellName ~= tostring(e.actionSpellID) then
-        return auraName .. " → " .. spellName
+        text = auraName .. " → " .. spellName
+    else
+        text = auraName
     end
-    return auraName
+    -- 敌对目标减益条目标注「（目标）」，与自身条目区分
+    if (e.unit or "player") == "target" then
+        text = text .. L("LEARNED_TARGET_TAG")
+    end
+    return text
 end
 
 local function CreateLearnedRow(index)
