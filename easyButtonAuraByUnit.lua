@@ -185,17 +185,19 @@ function B.GetSpellIcon(spellID)
 end
 
 -- =========================================================
--- 存档：全局开关（角色级）+ 绑定列表 / 预设启停（按专精）
+-- 存档：全局开关（角色级）+ 绑定列表 / 预设启停 / 自动学习表（按专精）
 -- easyButtonAuraByUnitDB.enabled = true|false          （角色级，所有专精共用）
--- easyButtonAuraByUnitDB.specs[specID] = { list = { cfg... }, presets = { [key]=false... } }
+-- easyButtonAuraByUnitDB.specs[specID] = { list = { cfg... }, presets = { [key]=false... },
+--                                          learned = { entry... } }
 --   cfg = { auraID = <光环 spellID>, bindSpell = <目标技能 spellID> }
 --     （不存 unit：运行时自动同时挂 player / target 两路，见 RebuildGroups）
 --   presets：预设禁用覆盖表——只记被关掉的条目（key = PresetData.lua 中的序号），缺省 = 启用
 -- easyButtonAuraByUnitDB.learnEnabled = true|false     （角色级；自动学习总开关）
--- easyButtonAuraByUnitDB.learned = { { auraID=..., actionSpellID=..., unit=..., disabled=bool }... }
---   自动学习表：脱战扫描光环 → 匹配动作条同名技能 自动生成的绑定（角色级通用一份，
---   不分专精——学的都是本职业技能）。unit = "player"（自身增益/自伤减益）或
---   "target"（敌对目标身上我方减益），缺省 player。每条自带 disabled 标记，可单独停用。
+-- specs[specID].learned = { { auraID=..., actionSpellID=..., unit=..., disabled=bool }... }
+--   自动学习表：脱战扫描当前形态下的光环 → 匹配动作条同名技能 自动生成的绑定（专精级——
+--   扫描的就是当前专精的 buff/debuff，各专精各学各的，共享 buff 玩到该专精时自然补学）。
+--   unit = "player"（自身增益/自伤减益）或 "target"（敌对目标身上我方减益），缺省 player。
+--   每条自带 disabled 标记，可单独停用。旧版角色级根表在 InitStorage 迁入当前专精。
 -- specID 取自 GetSpecializationInfo(GetSpecialization())，拿不到时用 0（通用槽）。
 -- =========================================================
 local function GetCurrentSpecID()
@@ -216,9 +218,6 @@ function B.InitStorage()
     if easyButtonAuraByUnitDB.learnEnabled == nil then
         easyButtonAuraByUnitDB.learnEnabled = true
     end
-    if not easyButtonAuraByUnitDB.learned then
-        easyButtonAuraByUnitDB.learned = {}
-    end
     if not easyButtonAuraByUnitDB.specs then
         easyButtonAuraByUnitDB.specs = { [0] = { list = {} } }
     end
@@ -234,10 +233,19 @@ function B.SelectSpec(specID)
     specID = specID or GetCurrentSpecID()
     local specs = easyButtonAuraByUnitDB.specs
     if not specs[specID] then
-        specs[specID] = { list = {}, presets = {} }
+        specs[specID] = { list = {}, presets = {}, learned = {} }
     end
     specs[specID].list = specs[specID].list or {}
     specs[specID].presets = specs[specID].presets or {}
+    specs[specID].learned = specs[specID].learned or {}
+    -- 旧版迁移：learned 曾是角色级根表 → 整体搬进当前专精（条目按光环 ID 精确匹配，
+    -- 混入其他专精的条目不会误触发，无需逐条甄别；该专精日后扫到会覆盖式补齐）
+    if easyButtonAuraByUnitDB.learned then
+        if #easyButtonAuraByUnitDB.learned > 0 and #specs[specID].learned == 0 then
+            specs[specID].learned = easyButtonAuraByUnitDB.learned
+        end
+        easyButtonAuraByUnitDB.learned = nil
+    end
     B.db = specs[specID]
     B.currentSpecID = specID
 end
@@ -315,7 +323,7 @@ function B.GetClassPresetList()
 end
 
 -- =========================================================
--- 自动学习表（角色级通用，不分专精）
+-- 自动学习表（专精级；总开关 learnEnabled 为角色级）
 -- =========================================================
 function B.IsLearnEnabled()
     B.InitStorage()
@@ -330,7 +338,7 @@ end
 
 function B.GetLearnedList()
     B.InitStorage()
-    return easyButtonAuraByUnitDB.learned
+    return B.db.learned
 end
 
 -- 单条停用/启用（entry.disabled）
@@ -345,7 +353,7 @@ end
 
 function B.ClearLearned()
     B.InitStorage()
-    wipe(easyButtonAuraByUnitDB.learned)
+    wipe(B.db.learned)
     B.NotifyBindingsChanged()
 end
 
@@ -445,14 +453,14 @@ function B.BuildSpellButtonMap()
 end
 
 -- =========================================================
--- 自动学习：脱战扫描光环 → 匹配动作条技能 → 存入 learned 表
+-- 自动学习：脱战扫描光环 → 匹配动作条技能 → 存入当前专精的 learned 表
 --   · 战斗红线：入口先查 InCombatLockdown()，战斗中绝不扫描（受限场景光环数据是 secret，
 --     脱战后才是明文）；扫到的 spellID 再过一道 issecretvalue 双保险。
 --   · 扫描源：自身增益 + 自身减益（自伤类）+ 敌对目标身上的我方减益
 --     （目标 debuff 多在战斗中挂上，脱战后残留时间窗正好可扫——用户确认纳入）。
 --   · 学习条件：有时限（expirationTime>0，滤形态/常驻）+ 我自己施放的（sourceUnit=player）
 --     + 动作条上存在同名/同ID技能 + 与手动/预设/已学去重（同一光环 ID 只活在一张表里，
---     手动 > 预设 > 学习，所以三者不会冲突重复显示）。上限 64 条。
+--     手动 > 预设 > 学习，所以三者不会冲突重复显示）。上限 64 条 / 专精。
 --   · 扫描时机：登录+5s、脱战+1s、脱战期间光环变化（UNIT_AURA 防抖 2s——覆盖补 buff）。
 -- =========================================================
 local LEARN_MAX = 64
@@ -867,8 +875,8 @@ end
 -- 合并构建：手动绑定 + 自动学习 + 内置预设 → 运行时组
 --   · 手动绑定：不选单位 → 每条自动展开成 player(HELPFUL|PLAYER) 与 target(HARMFUL|PLAYER)
 --     两个组；哪路命中显示哪路（另一路自然无匹配，代价只是每条绑定多一个容器）。
---   · 自动学习（角色级通用表）：脱战扫描产物，按 player + HELPFUL|PLAYER 挂载，
---     总开关 + 单条停用可控。
+--   · 自动学习（专精级表）：脱战扫描当前形态光环的产物，player 条目走增益通道、
+--     target 条目走减益通道，总开关 + 单条停用可控。
 --   · 预设（PresetData.lua，按职业过滤 + 专精级启停）：沿用上游过滤语义
 --     （缺省 unit="player" + HELPFUL；目标减益条目自带 HARMFUL|PLAYER）。
 --   · 合并规则：unit + filter + 技能 相同的多条来源共用一个容器
@@ -914,7 +922,7 @@ local function RebuildGroups()
         end
     end
 
-    -- 自动学习表（角色级；总开关 + 单条停用）：player 条目走增益通道，
+    -- 自动学习表（专精级；总开关 + 单条停用）：player 条目走增益通道，
     -- target 条目（敌对目标身上我方减益）走减益通道。
     -- 优先级：手动绑定 > 学习条目——光环 ID 已被当前专精手动绑定的学习条目跳过
     -- （不删除：本专精删掉手动绑定后学习条目自动恢复；其他专精不受影响）
