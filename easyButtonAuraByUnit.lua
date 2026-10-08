@@ -38,6 +38,7 @@ local LOCALES = {
         LEARN_ENABLE      = "Auto-learn",
         LEARN_CLEAR       = "Clear",
         LEARNED_TARGET_TAG = " (target)",
+        LEARN_SUPERSEDED  = " (taken over by manual binding)",
         LEARN_TIP         = "While out of combat, scans your own timed buffs and debuffs (and your debuffs on a hostile target) and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
         COL_AURA          = "Aura",
         COL_SPELL_BIND    = "Bind Spell",
@@ -60,6 +61,7 @@ local LOCALES = {
         LEARN_ENABLE      = "自动学习",
         LEARN_CLEAR       = "清空",
         LEARNED_TARGET_TAG = "（目标）",
+        LEARN_SUPERSEDED  = "（已被手动绑定接管）",
         LEARN_TIP         = "脱战时扫描自身增益/减益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；可随时清空或整体关闭。",
         COL_AURA          = "光环",
         COL_SPELL_BIND    = "绑定技能",
@@ -82,6 +84,7 @@ local LOCALES = {
         LEARN_ENABLE      = "自動學習",
         LEARN_CLEAR       = "清空",
         LEARNED_TARGET_TAG = "（目標）",
+        LEARN_SUPERSEDED  = "（已被手動綁定接管）",
         LEARN_TIP         = "脫戰時掃描自身增益／減益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；可隨時清空或整體關閉。",
         COL_AURA          = "光環",
         COL_SPELL_BIND    = "綁定技能",
@@ -242,6 +245,14 @@ end
 function B.GetList()
     if B.db and B.db.list then return B.db.list end
     return {}
+end
+
+-- 该光环 ID 是否已被当前专精的手动绑定覆盖（手动 > 学习 优先级判据）
+function B.IsAuraManuallyBound(auraID)
+    for _, cfg in ipairs(B.GetList()) do
+        if cfg.auraID == auraID then return true end
+    end
+    return false
 end
 
 -- 新增一条空绑定（返回新条目索引）
@@ -904,10 +915,13 @@ local function RebuildGroups()
     end
 
     -- 自动学习表（角色级；总开关 + 单条停用）：player 条目走增益通道，
-    -- target 条目（敌对目标身上我方减益）走减益通道
+    -- target 条目（敌对目标身上我方减益）走减益通道。
+    -- 优先级：手动绑定 > 学习条目——光环 ID 已被当前专精手动绑定的学习条目跳过
+    -- （不删除：本专精删掉手动绑定后学习条目自动恢复；其他专精不受影响）
     if B.IsLearnEnabled() then
         for _, e in ipairs(B.GetLearnedList()) do
-            if not e.disabled and e.auraID and e.actionSpellID then
+            if not e.disabled and e.auraID and e.actionSpellID
+                and not B.IsAuraManuallyBound(e.auraID) then
                 local unit = e.unit or "player"
                 local filter = (unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
                 addGroup(unit, filter, e.actionSpellID, e.auraID)

@@ -340,6 +340,10 @@ local function LearnedDisplayText(e)
     if (e.unit or "player") == "target" then
         text = text .. L("LEARNED_TARGET_TAG")
     end
+    -- 该光环已被当前专精手动绑定接管 → 标注（运行时该条目不生效，删掉手动绑定即自动恢复）
+    if B.IsAuraManuallyBound and B.IsAuraManuallyBound(e.auraID) then
+        text = text .. L("LEARN_SUPERSEDED")
+    end
     return text
 end
 
