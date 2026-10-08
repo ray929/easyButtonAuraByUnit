@@ -4,17 +4,20 @@
 -- 界面分两块（沿用 easyButtonAuraByCDM 的既定模式）：
 --   1. 暴雪插件设置里的【占位页】：标题（金色大字，与插件图标同色系）+ 提示 + 按钮，
 --      点按钮打开自有配置窗口。
---   2. 【自有配置窗口】：滚动区内含两个区段——
---      · 手动绑定列表：每行 = 图标 + 光环输入框 + 技能输入框 + 状态 + 删除（单行紧凑布局，
---        无字段标题；追踪单位自动识别，主文件对每条绑定同时挂 player/target 两路）。
---      · 内置预设列表（PresetData.lua，按当前职业过滤）：每行 = 启用复选框 + 图标 + 名称，
---        逐条启停（专精级存档，缺省启用）。
+--   2. 【自有配置窗口】：
+--      · 固定头部：当前专精 + 「手动配置」区标题（不再放说明文字）。
+--      · 滚动区三段：
+--        - 手动绑定：每行 = 图标 + 光环[输入框] + 绑定技能[输入框] + 状态 + 删除
+--          （单行紧凑；追踪单位自动识别，主文件对每条绑定同时挂 player/target 两路）。
+--        - 自动学习：脱战扫描自身增益自动生成的绑定（角色级通用表），区标题行带
+--          总开关复选框 + 清空按钮，每条可单独停用。
+--        - 内置预设：PresetData.lua 按当前职业过滤，每条启用复选框（专精级，缺省启用）。
 --
 -- 战斗行为：战斗中配置窗口直接隐藏，战斗结束若此前是打开状态则自动恢复；
 -- 战斗中不响应 /babu 与占位页按钮。
 --
--- 布局约定：所有控件的坐标都是【相对 row 的绝对坐标】，不互相链式锚定；
--- 列表区为【固定高度 + 滚动条】，滚动条显式重锚进窗口内右缘。
+-- 布局约定：行内控件用【相对 row 的绝对坐标】，区段标题行内部允许链式锚定
+-- （长度随本地化变化，链式更稳）；列表区为【固定高度 + 滚动条】，滚动条显式重锚进窗口内右缘。
 
 local B = EasyButtonAuraByUnit
 local L = B.L
@@ -23,14 +26,18 @@ local PANEL_W = 680
 local ROW_W   = PANEL_W - 44
 local ROW_H   = 30        -- 手动绑定行：单行紧凑
 local PRESET_ROW_H = 28   -- 预设行
+local LEARN_ROW_H  = 28   -- 自动学习行
 
 local VISIBLE_ROWS = 12
 local LIST_H = VISIBLE_ROWS * ROW_H
 
--- 行内控件横坐标（相对 row 左侧；单行布局，无字段标题）
-local X_AURA,  W_AURA  = 32, 150
-local X_SPELL, W_SPELL = 190, 150
-local X_STATUS          = 348
+-- 行内控件横坐标（相对 row 左侧；单行布局，输入框前带名称标签）
+local X_AURA_LABEL       = 30   -- 「光环」标签
+local X_AURA,  W_AURA    = 60, 130
+local X_SPELL_LABEL      = 196  -- 「绑定技能」标签
+local X_SPELL, W_SPELL   = 252, 130
+local X_STATUS           = 390
+local X_DEL              = 478  -- 删除按钮（固定横坐标，不再贴窗口右缘）
 local ADD_ROW_H = 36    -- 「添加绑定」按钮区高度
 
 -- 暴雪设置分类名 / 配置窗口标题：不本地化，固定用插件名（工作区约定）
@@ -42,8 +49,9 @@ local GOLD_R, GOLD_G, GOLD_B = 0.910, 0.737, 0.459
 local STUB_W = 520
 
 local configFrame
-local rows = {}
-local presetRows = {}
+local rows = {}         -- 手动绑定行
+local learnedRows = {}  -- 自动学习行
+local presetRows = {}   -- 内置预设行
 local refreshing = false
 
 -- =========================================================
@@ -124,7 +132,7 @@ local function CommitSpellEdit(row)
 end
 
 -- =========================================================
--- 手动绑定行控件（单行：图标 + 光环输入框 + 技能输入框 + 状态 + 删除）
+-- 手动绑定行控件（单行：图标 + 光环[ ] + 绑定技能[ ] + 状态 + 删除）
 -- =========================================================
 local function CreateRow(index)
     local row = CreateFrame("Frame", nil, configFrame.rows)
@@ -140,6 +148,11 @@ local function CreateRow(index)
     AddTip(row.icon, function()
         return row.icon.spellID and B.GetSpellDisplayName(row.icon.spellID) or nil
     end)
+
+    -- 「光环」标签
+    row.auraLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.auraLabel:SetPoint("LEFT", X_AURA_LABEL, 0)
+    row.auraLabel:SetText(L("COL_AURA"))
 
     -- 光环输入框
     row.auraEdit = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
@@ -158,6 +171,11 @@ local function CreateRow(index)
         row.auraEdit:ClearFocus()
         row._committing = false
     end)
+
+    -- 「绑定技能」标签
+    row.spellLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.spellLabel:SetPoint("LEFT", X_SPELL_LABEL, 0)
+    row.spellLabel:SetText(L("COL_SPELL_BIND"))
 
     -- 技能输入框
     row.spellEdit = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
@@ -182,10 +200,10 @@ local function CreateRow(index)
     row.status:SetPoint("LEFT", X_STATUS, 0)
     row.status:SetJustifyH("LEFT")
 
-    -- 删除按钮
+    -- 删除按钮（固定横坐标，不贴右缘）
     row.delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
     row.delBtn:SetSize(48, 20)
-    row.delBtn:SetPoint("RIGHT", -4, 0)
+    row.delBtn:SetPoint("LEFT", X_DEL, 0)
     row.delBtn:SetText(L("DEL"))
     row.delBtn:SetScript("OnClick", function()
         if row.index then
@@ -228,7 +246,7 @@ end
 -- =========================================================
 -- 内置预设区（按当前职业过滤；复选框启停）
 -- =========================================================
--- 预设行显示文本：光环名（数组取首个 + 计数）→ 技能名；附魔 = 附魔名 → 技能名
+-- 预设光环名列表（auraSpellID 兼容数组）
 local function PresetAuraNames(e)
     local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
     local names = {}
@@ -238,16 +256,36 @@ local function PresetAuraNames(e)
     return names
 end
 
+-- 预设行显示文本：光环名（数组取首个 + 计数）→ 技能名
 local function PresetDisplayText(e)
     local spellName = B.GetSpellDisplayName(e.actionSpellID)
     if e.enchantID then
+        -- 上游 enchantName 是英文硬编码；一律显示客户端本地化的技能名
+        -- （GetSpellDisplayName 查询失败时返回数字字符串，此时才回退 enchantName）
+        if spellName and spellName ~= "" and spellName ~= tostring(e.actionSpellID) then
+            return spellName
+        end
         return (e.enchantName or tostring(e.enchantID)) .. " → " .. spellName
     end
-    local names = PresetAuraNames(e)
+    local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
+    local names = {}
+    for _, id in ipairs(ids) do
+        names[#names + 1] = B.GetSpellDisplayName(id)
+    end
     if #names > 1 then
         return (names[1] or "?") .. " (+" .. (#names - 1) .. ") → " .. spellName
     end
     return (names[1] or "?") .. " → " .. spellName
+end
+
+local function PresetTooltipText(e)
+    local spellName = B.GetSpellDisplayName(e.actionSpellID)
+    if e.enchantID then
+        return B.GetSpellDisplayName(e.actionSpellID) ..
+            (e.enchantID and (" (enchantID: " .. e.enchantID .. ")") or "")
+    end
+    local names = PresetAuraNames(e)
+    return table.concat(names, ", ") .. " → " .. spellName
 end
 
 local function CreatePresetRows()
@@ -274,14 +312,8 @@ local function CreatePresetRows()
         row.text:SetPoint("LEFT", row.iconTex, "RIGHT", 8, 0)
         row.text:SetJustifyH("LEFT")
 
-        AddTip(row.check, function()
-            local names = e.enchantID and { e.enchantName or tostring(e.enchantID) } or PresetAuraNames(e)
-            return table.concat(names, ", ") .. " → " .. B.GetSpellDisplayName(e.actionSpellID)
-        end)
-        AddTip(row.iconTex, function()
-            local names = e.enchantID and { e.enchantName or tostring(e.enchantID) } or PresetAuraNames(e)
-            return table.concat(names, ", ") .. " → " .. B.GetSpellDisplayName(e.actionSpellID)
-        end)
+        AddTip(row.check, function() return PresetTooltipText(e) end)
+        AddTip(row.iconTex, function() return PresetTooltipText(e) end)
 
         row.iconTex:SetTexture(B.GetSpellIcon(e.actionSpellID)
             or (not e.enchantID and B.GetSpellIcon(type(e.auraSpellID) == "table" and e.auraSpellID[1] or e.auraSpellID))
@@ -293,18 +325,76 @@ local function CreatePresetRows()
 end
 
 -- =========================================================
+-- 自动学习区（角色级通用表；区标题行带总开关 + 清空，行带单条停用）
+-- =========================================================
+local function LearnedDisplayText(e)
+    local auraName = B.GetSpellDisplayName(e.auraID)
+    local spellName = B.GetSpellDisplayName(e.actionSpellID)
+    if spellName and spellName ~= auraName and spellName ~= tostring(e.actionSpellID) then
+        return auraName .. " → " .. spellName
+    end
+    return auraName
+end
+
+local function CreateLearnedRow(index)
+    local row = CreateFrame("Frame", nil, configFrame.rows)
+    row:SetSize(ROW_W, LEARN_ROW_H)
+
+    row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+    row.check:SetSize(22, 22)
+    row.check:SetPoint("LEFT", 2, 0)
+    row.check:SetHitRectInsets(0, 0, 0, 0)
+    row.check:SetScript("OnClick", function(self)
+        if row.index then
+            B.SetLearnedDisabled(row.index, not self:GetChecked())
+        end
+    end)
+
+    row.iconTex = row:CreateTexture(nil, "ARTWORK")
+    row.iconTex:SetSize(18, 18)
+    row.iconTex:SetPoint("LEFT", 30, 0)
+
+    row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    row.text:SetPoint("LEFT", row.iconTex, "RIGHT", 8, 0)
+    row.text:SetJustifyH("LEFT")
+
+    AddTip(row.check, function()
+        if row.index then
+            local e = B.GetLearnedList()[row.index]
+            return e and LearnedDisplayText(e) or nil
+        end
+    end)
+
+    learnedRows[#learnedRows + 1] = row
+    return row
+end
+
+-- =========================================================
 -- 面板刷新 + 滚动区内部布局
 -- =========================================================
--- 手动绑定行数变化时，重排滚动区内的静态区段（添加按钮 / 预设标题 / 预设行）
+-- 手动行数 / 学习表变化时，重排滚动区内的动态区段（添加按钮 / 自动学习 / 内置预设）
 local function LayoutScrollContent(count)
     local y = count * ROW_H
     configFrame.addBtn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(y + 4))
-    configFrame.presetHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -(y + ADD_ROW_H))
-    local py = y + ADD_ROW_H + 26
+
+    -- 自动学习区标题行（控件横向链式锚定，随本地化文字长度自适应）
+    local ly = y + ADD_ROW_H
+    configFrame.learnedHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -ly)
+    configFrame.learnCheck:SetPoint("LEFT", configFrame.learnedHeader, "RIGHT", 14, -1)
+    configFrame.learnLabel:SetPoint("LEFT", configFrame.learnCheck, "RIGHT", 2, 0)
+    configFrame.learnClear:SetPoint("LEFT", configFrame.learnLabel, "RIGHT", 10, -3)
+
+    local learned = B.GetLearnedList()
+    local nLearned = B.IsLearnEnabled() and #learned or 0
+    local py = ly + 26 + nLearned * LEARN_ROW_H + 4
+
+    -- 内置预设区标题 + 行
+    configFrame.presetHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -py)
+    local py2 = py + 26
     for i, pr in ipairs(presetRows) do
-        pr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(py + (i - 1) * PRESET_ROW_H))
+        pr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(py2 + (i - 1) * PRESET_ROW_H))
     end
-    return py + #presetRows * PRESET_ROW_H + 8
+    return py2 + #presetRows * PRESET_ROW_H + 8
 end
 
 local function DoRefresh()
@@ -315,6 +405,7 @@ local function DoRefresh()
         configFrame.enableCheck:SetChecked(B.IsEnabled())
     end
 
+    -- 手动绑定行
     local list = B.GetList()
     local count = #list
     local buttonMap = B.BuildSpellButtonMap()
@@ -336,7 +427,27 @@ local function DoRefresh()
         rows[i]:Hide()
     end
 
-    -- 预设复选框状态（随专精切换刷新）
+    -- 自动学习行（总开关关闭时整段隐藏，标题行保留以便重新开启）
+    local learned = B.GetLearnedList()
+    configFrame.learnCheck:SetChecked(B.IsLearnEnabled())
+    local nVisible = B.IsLearnEnabled() and #learned or 0
+    for i = 1, nVisible do
+        local row = learnedRows[i] or CreateLearnedRow(i)
+        local e = learned[i]
+        row.index = i
+        row.check:SetChecked(not e.disabled)
+        row.iconTex:SetTexture(B.GetSpellIcon(e.auraID)
+            or B.GetSpellIcon(e.actionSpellID)
+            or "Interface\\Icons\\INV_Misc_QuestionMark")
+        row.text:SetText(LearnedDisplayText(e))
+        row:Show()
+    end
+    for i = nVisible + 1, #learnedRows do
+        learnedRows[i].index = nil
+        learnedRows[i]:Hide()
+    end
+
+    -- 内置预设复选框状态（随专精切换刷新）
     for _, pr in ipairs(presetRows) do
         pr.check:SetChecked(B.IsPresetEnabled(pr.key))
     end
@@ -349,7 +460,7 @@ local function DoRefresh()
 
     -- 窗口高度 = 顶部实际几何 + 固定列表高度 + 底部留白
     local pTop, rTop = configFrame:GetTop(), configFrame.scroll:GetTop()
-    local headerH = (pTop and rTop and pTop > rTop) and (pTop - rTop) or 130
+    local headerH = (pTop and rTop and pTop > rTop) and (pTop - rTop) or 90
     configFrame:SetSize(PANEL_W, headerH + LIST_H + 20)
 end
 
@@ -383,11 +494,10 @@ local function BuildConfigFrame()
     configFrame.specText = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     configFrame.specText:SetPoint("TOPLEFT", 16, -36)
 
-    configFrame.desc = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    configFrame.desc:SetPoint("TOPLEFT", configFrame.specText, "BOTTOMLEFT", 0, -8)
-    configFrame.desc:SetWidth(PANEL_W - 40)
-    configFrame.desc:SetJustifyH("LEFT")
-    configFrame.desc:SetText(L("PAGE_DESC"))
+    -- 「手动配置」区标题（固定头部；不再放说明文字——用户指定去掉）
+    configFrame.manualHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    configFrame.manualHeader:SetPoint("TOPLEFT", configFrame.specText, "BOTTOMLEFT", 0, -8)
+    configFrame.manualHeader:SetText(L("SECTION_MANUAL"))
 
     -- 全局启用开关（角色级、不分专精；窗口右上角，标签锚在复选框左侧防越界）
     configFrame.enableCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
@@ -407,7 +517,7 @@ local function BuildConfigFrame()
 
     -- 列表区：固定高度的滚动区（行数超过可见行数时出现滚动条，支持鼠标滚轮）
     configFrame.scroll = CreateFrame("ScrollFrame", "EasyButtonAuraByUnitConfigScroll", configFrame, "UIPanelScrollFrameTemplate")
-    configFrame.scroll:SetPoint("TOPLEFT", configFrame.desc, "BOTTOMLEFT", 8, -14)
+    configFrame.scroll:SetPoint("TOPLEFT", configFrame.manualHeader, "BOTTOMLEFT", 8, -10)
     configFrame.scroll:SetSize(ROW_W, LIST_H)
     configFrame.scroll:EnableMouseWheel(true)
     configFrame.scroll:SetScript("OnMouseWheel", function(self, delta)
@@ -442,11 +552,32 @@ local function BuildConfigFrame()
         B.AddBinding()
     end)
 
-    -- 预设区标题（在滚动区内、添加按钮之下）
+    -- 自动学习区：标题 + 总开关复选框 + 清空按钮（横向链式锚定，随本地化自适应）
+    configFrame.learnedHeader = configFrame.rows:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    configFrame.learnedHeader:SetText(L("SECTION_LEARNED"))
+
+    configFrame.learnCheck = CreateFrame("CheckButton", nil, configFrame.rows, "UICheckButtonTemplate")
+    configFrame.learnCheck:SetSize(22, 22)
+    configFrame.learnCheck:SetHitRectInsets(0, 0, 0, 0)
+    AddTip(configFrame.learnCheck, L("LEARN_TIP"))
+    configFrame.learnCheck:SetScript("OnClick", function(self)
+        B.SetLearnEnabled(self:GetChecked() and true or false)
+    end)
+
+    configFrame.learnLabel = configFrame.learnCheck:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    configFrame.learnLabel:SetText(L("LEARN_ENABLE"))
+
+    configFrame.learnClear = CreateFrame("Button", nil, configFrame.rows, "UIPanelButtonTemplate")
+    configFrame.learnClear:SetSize(64, 20)
+    configFrame.learnClear:SetText(L("LEARN_CLEAR"))
+    configFrame.learnClear:SetScript("OnClick", function()
+        B.ClearLearned()
+    end)
+
+    -- 内置预设区标题 + 行（按当前职业一次性构建；职业不会随会话变化）
     configFrame.presetHeader = configFrame.rows:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     configFrame.presetHeader:SetText(L("PRESET_HEADER"))
 
-    -- 预设行（按当前职业一次性构建；职业不会随会话变化）
     CreatePresetRows()
 
     configFrame:SetScript("OnShow", function()
