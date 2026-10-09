@@ -183,13 +183,9 @@ if IS_CREATOR then
             pool[i]:Hide()
         end
         menu:SetSize(210, PAD * 2 + n * ITEM_H)
-        -- 依按钮在小地图的方位选择菜单弹出方向，减少被屏幕边缘裁切
+        -- 固定弹出在按钮左侧：锚点用菜单右缘对齐按钮左缘（用户指定，不做方位翻转）
         menu:ClearAllPoints()
-        if math.cos(math.rad(db.angle)) > 0 then
-            menu:SetPoint("TOPRIGHT", btn, "TOPLEFT", -6, 4)
-        else
-            menu:SetPoint("TOPLEFT", btn, "TOPRIGHT", 6, 4)
-        end
+        menu:SetPoint("TOPRIGHT", btn, "TOPLEFT", -6, 4)
         cloak:Show()
         menu:Show()
     end
@@ -231,12 +227,9 @@ end
 
 -- =========================================================
 -- 本插件注册进共享按钮（此块在每个插件拷贝里各不相同）
+-- 菜单项显示 TOC 的英文插件名，不做本地化（该场景无本地化命名需求）
 -- =========================================================
-local loc = GetLocale()
-local title = (loc == "zhCN" and "光环绑定 by Unit")
-           or (loc == "zhTW" and "光環綁定 by Unit")
-           or "Easy Button Aura by Unit"
-HUB.Register(ADDON_NAME, title, "Interface\\AddOns\\easyButtonAuraByUnit\\Icon.tga", function()
+HUB.Register(ADDON_NAME, "Easy Button Aura by Unit", "Interface\\AddOns\\easyButtonAuraByUnit\\Icon.tga", function()
     if EasyButtonAuraByUnit and EasyButtonAuraByUnit.ToggleConfigFrame then
         EasyButtonAuraByUnit.ToggleConfigFrame()
     end
