@@ -420,9 +420,17 @@ local function FindActionButtonForSpellName(name)
             -- 不跳过隐藏按钮会错误匹配到隐藏栏（"拖到右栏却显示在左栏/不显示"）。
             if btn and btn:IsShown() then
                 local atype, actionSpellID = GetActionInfo(btn.action)
-                if atype == "macro" and GetMacroSpell and type(actionSpellID) == "number" then
-                    -- 宏按钮：GetActionInfo 第二返回值是宏槽位号，解析宏实际施放的法术
-                    actionSpellID = GetMacroSpell(actionSpellID)
+                if atype == "macro" and type(actionSpellID) == "number" then
+                    -- 宏按钮 GetActionInfo 第二返回值的语义在版本间有分歧：宏槽位号或
+                    -- 宏指向的法术 ID。12.x 实测是后者（GetSpellName 直接命中宏名）——
+                    -- 曾误当槽位号再套 GetMacroSpell（传法术 ID 恒 nil），把宏显示弄丢。
+                    -- 兜底：GetMacroSpell 解析得出就用（旧语义），否则保留原值（新语义）。
+                    if GetMacroSpell then
+                        local okM, mSpell = pcall(GetMacroSpell, actionSpellID)
+                        if okM and type(mSpell) == "number" and mSpell > 0 then
+                            actionSpellID = mSpell
+                        end
+                    end
                 end
                 if actionSpellID then
                     -- 直接 GetSpellName，不要 GetBaseSpell 重定向（上游 AutoCDM 踩过名字错位坑）
@@ -458,11 +466,20 @@ local function ResolveActionSpellID(btn)
     if atype == "spell" and type(id) == "number" and id > 0 and not IsSecret(id) then
         return id
     end
-    if atype == "macro" and GetMacroSpell and type(id) == "number" then
-        local okM, mSpell = pcall(GetMacroSpell, id)
-        if okM and type(mSpell) == "number" and mSpell > 0 and not IsSecret(mSpell) then
-            return mSpell
+    if atype == "macro" and type(id) == "number" then
+        -- 同 FindActionButtonForSpellName：宏第二返回值双语义（宏槽位号 / 法术 ID），
+        -- GetMacroSpell 解析不出时原样当法术 ID 用（12.x 实测语义），旧语义下
+        -- 返回宏槽位号会被后续 IsPlayerSpell 门禁拦下，无害。
+        if GetMacroSpell then
+            local okM, mSpell = pcall(GetMacroSpell, id)
+            if okM and type(mSpell) == "number" and mSpell > 0 and not IsSecret(mSpell) then
+                return mSpell
+            end
         end
+        if id > 0 and not IsSecret(id) then
+            return id
+        end
+        return
     end
 end
 
@@ -504,11 +521,19 @@ function B.BuildSpellButtonMap()
                 local ok, atype, id = pcall(GetActionInfo, btn.action)
                 if ok and atype == "spell" and id and id > 0 and not IsSecret(id) and not map[id] then
                     map[id] = prefix .. i
-                elseif ok and atype == "macro" and GetMacroSpell then
-                    -- 宏按钮：GetActionInfo 只给宏槽位号，解析宏指向的法术（灵魂行者的恩赐这类
-                    -- 常被拖成宏/#showtooltip，按 ID/名字都匹配不到就是漏学了）
-                    local mok, mSpell = pcall(GetMacroSpell, id)
-                    if mok and mSpell and mSpell > 0 and not IsSecret(mSpell) and not map[mSpell] then
+                elseif ok and atype == "macro" and type(id) == "number" then
+                    -- 宏按钮：GetActionInfo 第二返回值双语义（12.x = 宏指向的法术 ID，
+                    -- 旧版 = 宏槽位号）。先试 GetMacroSpell（旧语义），解析不出原样当
+                    -- 法术 ID 收进映射（12.x 语义）；宏施放物品时两者都拿不到，跳过。
+                    local mSpell
+                    if GetMacroSpell then
+                        local mok, m = pcall(GetMacroSpell, id)
+                        if mok and type(m) == "number" then mSpell = m end
+                    end
+                    if not mSpell and id > 0 and not IsSecret(id) then
+                        mSpell = id
+                    end
+                    if mSpell and mSpell > 0 and not IsSecret(mSpell) and not map[mSpell] then
                         map[mSpell] = prefix .. i
                     end
                 end
@@ -530,9 +555,17 @@ function B.ProbeActionBarForName(name, auraSpellID)
                 local ok, atype, id = pcall(GetActionInfo, btn.action)
                 if ok then
                     local spellID = id
-                    if atype == "macro" and GetMacroSpell and type(id) == "number" then
-                        local okM, m = pcall(GetMacroSpell, id)
-                        spellID = (okM and type(m) == "number") and m or nil
+                    if atype == "macro" and type(id) == "number" then
+                        -- 宏双语义兜底，与 FindActionButtonForSpellName 一致
+                        if GetMacroSpell then
+                            local okM, m = pcall(GetMacroSpell, id)
+                            if okM and type(m) == "number" and m > 0 then
+                                spellID = m
+                            end
+                        end
+                        if spellID == id and not (id > 0 and not IsSecret(id)) then
+                            spellID = nil
+                        end
                     end
                     local spellName = (spellID and C_Spell.GetSpellName(spellID)) or nil
                     if (spellName and spellName == name)
