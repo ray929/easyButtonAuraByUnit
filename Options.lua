@@ -9,7 +9,7 @@
 --      · 滚动区三段：
 --        - 手动绑定：每行 = 图标 + 光环[输入框] + 绑定技能[输入框] + 状态 + 删除
 --          （单行紧凑；追踪单位自动识别，主文件对每条绑定同时挂 player/target 两路）。
---        - 自动学习：脱战扫描自身增益自动生成的绑定（角色级通用表），区标题行带
+--        - 自动学习：脱战扫描光环自动生成的绑定（专精级表），区标题行带
 --          总开关复选框 + 清空按钮，每条可单独停用。
 --        - 内置预设：PresetData.lua 按当前职业过滤，每条启用复选框（专精级，缺省启用）。
 --
@@ -512,12 +512,19 @@ local function BuildConfigFrame()
     local titleText = (configFrame.TitleContainer and configFrame.TitleContainer.TitleText) or configFrame.TitleText
     if titleText then titleText:SetText(ADDON_TITLE) end
 
+    -- 标题栏下分割线（与窗口内三段分割线同款，三窗统一）
+    configFrame.divTitle = configFrame:CreateTexture(nil, "ARTWORK")
+    configFrame.divTitle:SetColorTexture(0.7, 0.7, 0.7, 0.35)
+    configFrame.divTitle:SetSize(PANEL_W - 24, 1)
+    configFrame.divTitle:SetPoint("TOPLEFT", 12, -31)
+
     configFrame.specText = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     configFrame.specText:SetPoint("TOPLEFT", 16, -36)
 
-    -- 「手动配置」区标题（固定头部；不再放说明文字——用户指定去掉）
+    -- 「手动配置」区标题（固定头部；不再放说明文字——用户指定去掉）。
+    -- x 与滚动区内「自动学习 / 内置预设」区标题对齐（scroll x=24 + rows 内标题 x=8 = 32）
     configFrame.manualHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    configFrame.manualHeader:SetPoint("TOPLEFT", configFrame.specText, "BOTTOMLEFT", 0, -8)
+    configFrame.manualHeader:SetPoint("TOPLEFT", configFrame.specText, "BOTTOMLEFT", 16, -8)
     configFrame.manualHeader:SetText(L("SECTION_MANUAL"))
 
     -- 全局启用开关（角色级、不分专精；窗口右上角，标签锚在复选框左侧防越界）
@@ -538,7 +545,8 @@ local function BuildConfigFrame()
 
     -- 列表区：固定高度的滚动区（行数超过可见行数时出现滚动条，支持鼠标滚轮）
     configFrame.scroll = CreateFrame("ScrollFrame", "EasyButtonAuraByUnitConfigScroll", configFrame, "UIPanelScrollFrameTemplate")
-    configFrame.scroll:SetPoint("TOPLEFT", configFrame.manualHeader, "BOTTOMLEFT", 8, -10)
+    -- 锚到窗口固定坐标：manualHeader 右移对齐后，scroll 须保持原 x=24，行/区标题几何才不变
+    configFrame.scroll:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 24, -84)
     configFrame.scroll:SetSize(ROW_W, LIST_H)
     configFrame.scroll:EnableMouseWheel(true)
     configFrame.scroll:SetScript("OnMouseWheel", function(self, delta)
