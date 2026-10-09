@@ -441,10 +441,17 @@ function B.BuildSpellButtonMap()
             for i = 1, maxBtns do
                 local btn = _G[prefix .. i]
                 if btn and btn.action then
-                    local ok, atype, id = pcall(GetActionInfo, btn.action)
-                    if ok and atype == "spell" and id and id > 0 and not IsSecret(id) and not map[id] then
-                        map[id] = prefix .. i
+                local ok, atype, id = pcall(GetActionInfo, btn.action)
+                if ok and atype == "spell" and id and id > 0 and not IsSecret(id) and not map[id] then
+                    map[id] = prefix .. i
+                elseif ok and atype == "macro" and GetMacroSpell then
+                    -- 宏按钮：GetActionInfo 只给宏槽位号，解析宏指向的法术（灵魂行者的恩赐这类
+                    -- 常被拖成宏/#showtooltip，按 ID/名字都匹配不到就是漏学了）
+                    local mok, mSpell = pcall(GetMacroSpell, id)
+                    if mok and mSpell and mSpell > 0 and not IsSecret(mSpell) and not map[mSpell] then
+                        map[mSpell] = prefix .. i
                     end
+                end
                 end
             end
         end
@@ -521,11 +528,39 @@ local function LearnAlreadyCovered(auraID, seen)
     return false
 end
 
-local function ScanLearnableAuras()
-    if not B.IsEnabled() or not B.IsLearnEnabled() then return end
-    if InCombatLockdown() then return end          -- 战斗红线：绝不扫描
-    if IsAuraRestricted() then return end          -- 脱战但限制仍生效（大秘境全程/BOSS战/PvP）：光环是 secret，扫了也白扫
-    if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return end
+-- 诊断模式：verbose=true 时收集每条光环过门禁的明细（/babu scan 用），返回 { 行... }
+-- 静默模式（定时器触发）行为与旧版一致，不打印任何东西（全静默约定）。
+local function ScanLearnableAuras(verbose)
+    local report = verbose and {} or nil
+    local function log(fmt, ...)
+        if not report then return end
+        if select("#", ...) > 0 then
+            report[#report + 1] = fmt:format(...)
+        else
+            report[#report + 1] = fmt
+        end
+    end
+
+    if not B.IsEnabled() then
+        log("skip: addon disabled")
+        return 0, report
+    end
+    if not B.IsLearnEnabled() then
+        log("skip: auto-learn toggle off")
+        return 0, report
+    end
+    if InCombatLockdown() then
+        log("skip: in combat")                 -- 战斗红线：绝不扫描
+        return 0, report
+    end
+    if IsAuraRestricted() then
+        log("skip: addon restriction active (combat/encounter/challenge mode/pvp)")
+        return 0, report                       -- 脱战但限制仍生效（大秘境全程/BOSS战/PvP）：光环是 secret，扫了也白扫
+    end
+    if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then
+        log("skip: C_UnitAuras.GetAuraDataByIndex unavailable")
+        return 0, report
+    end
 
     local learned = B.GetLearnedList()
     local seen = {}
@@ -534,11 +569,21 @@ local function ScanLearnableAuras()
     end
 
     local buttonMap = B.BuildSpellButtonMap()
-    local added = false
+    if report then
+        local hasBarList = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) and true or false
+        local mapSize = 0
+        for _ in pairs(buttonMap) do mapSize = mapSize + 1 end
+        log("env: ActionBarButtonNames=%s, action-bar spell buttons=%d, learned=%d/%d",
+            tostring(hasBarList), mapSize, #learned, LEARN_MAX)
+    end
+
+    local added = 0
 
     for _, src in ipairs(LEARN_SOURCES) do
         if #learned >= LEARN_MAX then break end
-        if not src.needHostileTarget or HasHostileTarget() then
+        if src.needHostileTarget and not HasHostileTarget() then
+            log("channel %s/%s: no hostile target, skipped", src.unit, src.filter)
+        else
             local index = 1
             while #learned < LEARN_MAX do
                 local ok, data = pcall(C_UnitAuras.GetAuraDataByIndex, src.unit, index, src.filter)
@@ -546,42 +591,73 @@ local function ScanLearnableAuras()
                 if not ok or not data then break end
 
                 -- 字段级 secret 防护：即使整体门禁漏了（个别法术可被标记 always-secret，
-                -- 见 Secret_Values 谓词注），也不对 secret 值做比较
+                -- 见 Secret_Values 谓词注），也不对 secret 值做比较。
+                -- 注意：此处局部变量一律用 srcUnit 等新名，避免遮蔽外层循环的 src（曾因此丢失 unit 字段）
                 local spellID = data.spellId
                 local exp = data.expirationTime
-                local src = data.sourceUnit
-                if spellID and not IsSecret(spellID)
-                    and exp and not IsSecret(exp) and exp > 0                 -- 只学有时限的（过滤形态/常驻）
-                    and src == "player" and not IsSecret(src)                 -- 只学自己施放的
-                    and not LearnAlreadyCovered(spellID, seen) then
+                local srcUnit = data.sourceUnit
+
+                if not spellID or IsSecret(spellID) then
+                    log("aura @%d: spellId missing/secret, skipped", index - 1)
+                elseif not exp or IsSecret(exp) or exp <= 0 then
+                    log("%s (%s): no expiration (passive/form), skipped", tostring(data.name), tostring(spellID))
+                elseif srcUnit ~= "player" or IsSecret(srcUnit) then
+                    log("%s (%s): sourceUnit=%s, not self-cast, skipped",
+                        tostring(data.name), tostring(spellID), tostring(srcUnit))
+                elseif B.IsAuraManuallyBound(spellID) then
+                    log("%s (%d): already manually bound (manual takes precedence), skipped", data.name, spellID)
+                elseif LearnAlreadyCovered(spellID, seen) then
+                    log("%s (%d): already covered by preset/learned, skipped", data.name, spellID)
+                else
                     -- 匹配动作条技能：优先同 ID，退而求其次按名字找（命中不同 ID 的按钮也算）
                     local actionSpellID = buttonMap[spellID]
+                    local matchPath = "id"
                     if not actionSpellID and data.name and not IsSecret(data.name) then
                         local btn = FindActionButtonForSpellName(data.name)
                         if btn and btn.action ~= nil then
                             local _, aid = pcall(GetActionInfo, btn.action)
-                            if aid and aid > 0 and not IsSecret(aid) then actionSpellID = aid end
+                            if aid and aid > 0 and not IsSecret(aid) then
+                                actionSpellID = aid
+                                matchPath = "name"
+                            end
                         end
                     end
-                    if actionSpellID and IsPlayerSpell(actionSpellID) then
+                    if not actionSpellID then
+                        log("%s (%d): no matching action bar spell (buttonMap/name both miss), skipped",
+                            data.name, spellID)
+                    elseif not IsPlayerSpell(actionSpellID) then
+                        log("%s (%d): button spell %d is not a player spell, skipped",
+                            data.name, spellID, actionSpellID)
+                    else
                         learned[#learned + 1] = {
                             auraID = spellID,
                             actionSpellID = actionSpellID,
                             unit = src.unit,
                         }
                         seen[spellID] = true
-                        added = true
+                        added = added + 1
+                        log("%s (%d) -> spell %d [%s, %s] LEARNED", data.name, spellID, actionSpellID, matchPath, src.unit)
                     end
                 end
             end
         end
     end
 
-    if added then
+    if added > 0 then
         B.NotifyBindingsChanged()   -- 刷新面板 + 重建容器（战斗外才可能走到这）
     end
+    if report then
+        table.insert(report, 1, ("scan done: %d learned this run, %d total"):format(added, #learned))
+    end
+    return added, report
 end
 B.ScanLearnableAuras = ScanLearnableAuras
+
+-- 诊断入口（/babu scan）：返回报告行数组
+function B.RunLearnScanVerbose()
+    local _, report = ScanLearnableAuras(true)
+    return report or {}
+end
 
 -- 自动学习防抖：脱战期间光环变化（补 buff、目标减益残留）都是学习窗口；
 -- 战斗中本事件高频触发也无妨——timer 到点后 ScanLearnableAuras 的战斗门禁直接返回。
@@ -1154,6 +1230,16 @@ end)
 -- slash 命令：/babu 打开配置窗口（实现在 Options.lua）
 -- =========================================================
 SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
-SlashCmdList["EASYBUTTONAURABYUNIT"] = function()
+SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
+    msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if msg == "scan" then
+        -- 诊断模式：只在本命令显式触发时输出（全静默约定不含用户主动调用的调试命令）
+        if B.RunLearnScanVerbose then
+            for _, line in ipairs(B.RunLearnScanVerbose()) do
+                print("|cffE8BC75[babu]|r " .. line)
+            end
+        end
+        return
+    end
     if B.ToggleConfigFrame then B.ToggleConfigFrame() end
 end
