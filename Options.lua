@@ -137,7 +137,8 @@ end
 local function CreateRow(index)
     local row = CreateFrame("Frame", nil, configFrame.rows)
     row:SetSize(ROW_W, ROW_H)
-    row:SetPoint("TOPLEFT", 0, -(index - 1) * ROW_H)
+    -- 与自动学习/预设行同缩进（row x=30 → 图标 x≈34 对齐学习行图标）
+    row:SetPoint("TOPLEFT", 30, -(index - 1) * ROW_H)
 
     -- 图标（悬停显示光环法术提示）
     row.icon = CreateFrame("Button", nil, row)
@@ -386,10 +387,12 @@ end
 -- 手动行数 / 学习表变化时，重排滚动区内的动态区段（添加按钮 / 自动学习 / 内置预设）
 local function LayoutScrollContent(count)
     local y = count * ROW_H
-    configFrame.addBtn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(y + 4))
+    configFrame.addBtn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 30, -(y + 4))
 
-    -- 自动学习区标题行（控件横向链式锚定，随本地化文字长度自适应）
-    local ly = y + ADD_ROW_H
+    -- 分割线1 + 自动学习区标题行（控件横向链式锚定，随本地化文字长度自适应）
+    local dy1 = y + ADD_ROW_H + 8
+    configFrame.divLearn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 20, -dy1)
+    local ly = dy1 + 14
     configFrame.learnedHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -ly)
     configFrame.learnCheck:SetPoint("LEFT", configFrame.learnedHeader, "RIGHT", 14, -1)
     configFrame.learnLabel:SetPoint("LEFT", configFrame.learnCheck, "RIGHT", 2, 0)
@@ -397,16 +400,18 @@ local function LayoutScrollContent(count)
 
     local learned = B.GetLearnedList()
     local nLearned = B.IsLearnEnabled() and #learned or 0
-    -- 学习条目行：定位在标题行与内置预设区之间（此前漏写 SetPoint，行无锚定默认落在
+    -- 学习条目行：定位在标题行与分割线2之间（此前漏写 SetPoint，行无锚定默认落在
     -- 滚动区中心互相重叠 → 配置界面里「学到了但看不见」）
     for i, lr in ipairs(learnedRows) do
         lr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(ly + 26 + (i - 1) * LEARN_ROW_H))
     end
-    local py = ly + 26 + nLearned * LEARN_ROW_H + 4
 
-    -- 内置预设区标题 + 行
-    configFrame.presetHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -py)
-    local py2 = py + 26
+    -- 分割线2 + 内置预设区标题 + 行
+    local dy2 = ly + 26 + nLearned * LEARN_ROW_H + 10
+    configFrame.divPreset:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 20, -dy2)
+    local ph = dy2 + 14
+    configFrame.presetHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -ph)
+    local py2 = ph + 26
     for i, pr in ipairs(presetRows) do
         pr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(py2 + (i - 1) * PRESET_ROW_H))
     end
@@ -593,6 +598,14 @@ local function BuildConfigFrame()
     -- 内置预设区标题 + 行（按当前职业一次性构建；职业不会随会话变化）
     configFrame.presetHeader = configFrame.rows:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     configFrame.presetHeader:SetText(L("PRESET_HEADER"))
+
+    -- 分割线：手动绑定 | 自动学习 | 内置预设 三段之间（1px 半透明，绝对定位在 LayoutScrollContent）
+    for _, key in ipairs({ "divLearn", "divPreset" }) do
+        local div = configFrame.rows:CreateTexture(nil, "ARTWORK")
+        div:SetColorTexture(0.7, 0.7, 0.7, 0.35)
+        div:SetSize(ROW_W - 40, 1)
+        configFrame[key] = div
+    end
 
     CreatePresetRows()
 

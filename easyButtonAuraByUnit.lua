@@ -32,7 +32,7 @@ local LOCALES = {
     enUS = {
         SPEC_LABEL        = "Current Specialization",
         SPEC_UNKNOWN      = "Unknown",
-        ENABLE            = "Enabled",
+        ENABLE            = "Global Enable",
         SECTION_MANUAL    = "Manual Bindings",
         SECTION_LEARNED   = "Auto-Learned (out-of-combat scan)",
         LEARN_ENABLE      = "Auto-learn",
@@ -50,12 +50,12 @@ local LOCALES = {
         STATUS_NOT_ON_BAR = "not on action bars",
         OPEN_OPTIONS      = "Open Options",
         STUB_HINT         = "Click the button below, or type /babu, to open the configuration window.",
-        PRESET_HEADER     = "Built-in Presets (per-spec toggle)",
+        PRESET_HEADER     = "Built-in Presets",
     },
     zhCN = {
         SPEC_LABEL        = "当前专精",
         SPEC_UNKNOWN      = "未知",
-        ENABLE            = "启用",
+        ENABLE            = "全局启用",
         SECTION_MANUAL    = "手动配置",
         SECTION_LEARNED   = "自动学习（脱战扫描）",
         LEARN_ENABLE      = "自动学习",
@@ -73,12 +73,12 @@ local LOCALES = {
         STATUS_NOT_ON_BAR = "不在动作条上",
         OPEN_OPTIONS      = "打开配置",
         STUB_HINT         = "点击按钮，或者输入 /babu 打开配置窗口。",
-        PRESET_HEADER     = "内置预设（按专精启停）",
+        PRESET_HEADER     = "内置预设",
     },
     zhTW = {
         SPEC_LABEL        = "目前專精",
         SPEC_UNKNOWN      = "未知",
-        ENABLE            = "啟用",
+        ENABLE            = "全域啟用",
         SECTION_MANUAL    = "手動配置",
         SECTION_LEARNED   = "自動學習（脫戰掃描）",
         LEARN_ENABLE      = "自動學習",
@@ -96,7 +96,7 @@ local LOCALES = {
         STATUS_NOT_ON_BAR = "不在快捷列上",
         OPEN_OPTIONS      = "開啟設定",
         STUB_HINT         = "點擊按鈕，或者輸入 /babu 開啟設定視窗。",
-        PRESET_HEADER     = "內建預設（按專精啟停）",
+        PRESET_HEADER     = "內建預設",
     },
 }
 
@@ -306,7 +306,13 @@ function B.SetPresetEnabled(key, enabled)
     db.presets = db.presets or {}
     -- 启用 = 清除覆盖（回到缺省启用）；禁用 = 记 false。
     -- 不写 true 值：预设表日后扩充/调整顺序时，旧的覆盖记录不会错位生效。
-    db.presets[key] = enabled and nil or false
+    -- ⚠️ 不能写 `enabled and nil or false`：Lua 里 (true and nil) = nil，nil or false = false，
+    -- 勾选也会存成 false → 取消后永远无法重新勾上（2026-10-09 用户实测踩坑）。
+    if enabled then
+        db.presets[key] = nil
+    else
+        db.presets[key] = false
+    end
     B.NotifyBindingsChanged()
 end
 
