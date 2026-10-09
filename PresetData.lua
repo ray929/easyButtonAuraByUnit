@@ -33,10 +33,14 @@ end
 -- 全职业通用（class = nil，靠 IsPlayerSpell 门禁自动筛选）+ 无持续时间光环，见下方表内注释
 
 -- 嗜血/英勇家族：不同职业的引导技能不同，但施放到全队身上的增益本质是同一个效果
--- （嗜血 2825 / 英勇 32182 / 时间扭曲 80353 / 远古狂暴 90355 / 原始狂怒 264667 / 化身巨龙之怒 390386）。
+-- （嗜血 2825 / 英勇 32182 / 时间扭曲 80353 / 远古狂暴 90355 / 原始狂怒 264667 /
+--   原始暴怒-技能书版 272678 / 化身巨龙之怒 390386）。
 -- 任一命中即显示 → 用同一个光环 ID 集合；actionSpellID 指向本职业的施放技能按钮。
 -- filter 用缺省 HELPFUL（不加 |PLAYER）：队友施放的英勇同样显示（倒计时参考价值一致）。
-local LUST_AURAS = { 2825, 32182, 80353, 90355, 264667, 390386 }
+-- 注意 264667 与 272678 同名「原始暴怒」但体系不同：264667 是宠物施放版（wowhead 证实
+-- buff 本体），272678 是猎人技能书页版（效果为 Dummy，服务端转手触发 264667）；猎人条上
+-- 的按钮由「宠物掌控 272651」在召唤狂野系宠物时替换为 272678，故按钮定位用 272678。
+local LUST_AURAS = { 2825, 32182, 80353, 90355, 264667, 272678, 390386 }
 
 B.PRESET_DATA = {
     -- 全职业通用（复原：光环 1231418 → 技能 1231411，所有职业的公用技能）
@@ -51,7 +55,7 @@ B.PRESET_DATA = {
     { class = "SHAMAN", auraSpellID = LUST_AURAS, actionSpellID = 32182 },  -- 英勇（联盟）
     { class = "MAGE",   auraSpellID = LUST_AURAS, actionSpellID = 80353 },  -- 时间扭曲
     { class = "EVOKER", auraSpellID = LUST_AURAS, actionSpellID = 390386 }, -- 化身巨龙之怒
-    { class = "HUNTER", auraSpellID = LUST_AURAS, actionSpellID = 264667 }, -- 原始狂怒（宠物施放；按钮不在玩家动作条上则自动不显示）
+    { class = "HUNTER", auraSpellID = LUST_AURAS, actionSpellID = 272678 }, -- 原始暴怒（条上按钮 = 技能书版 272678，由宠物掌控 272651 替换而来；264667 为宠物施放版，过不了 IsPlayerSpell 门禁）
 
     -- 死亡骑士 DEATHKNIGHT（减伤/爆发；光环=技能同ID）
     { class = "DEATHKNIGHT", auraSpellID = 48792, actionSpellID = 48792 },  -- 冰封之韧（减伤）
