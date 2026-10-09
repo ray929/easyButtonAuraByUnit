@@ -5,8 +5,8 @@
 > Bind aura IDs to action bar buttons to track their remaining time and stacks.
 
 - Built-in presets (~90 entries + the class-agnostic Renewal) with per-entry toggles, and full manual binding for anything else. Retail only — presets are disabled on other clients (different spell/aura ID sets).
-- Per-binding tracking unit: your own buffs or debuffs you cast on your (hostile) target.
-- Auto-learn: while out of combat, your own timed buffs matching action bar spells are bound automatically (per specialization).
+- No unit dropdown: every binding automatically covers both channels — your own buffs and your debuffs on a hostile target — whichever matches, shows.
+- Auto-learn: while out of combat, your own timed buffs (and your debuffs on a hostile target) matching action bar spells are bound automatically (per specialization).
 - Duration-less auras (forms / instant toggles, e.g. Nature's Swiftness, Ghost Wolf) show a translucent green mask instead of a countdown.
 - Bindings are saved per specialization; a character-level master switch toggles everything.
 - Multiple auras bound to the same button share one display; any match shows.
@@ -19,8 +19,8 @@
 > 把光环 ID 绑定到动作条按钮，追踪其剩余时间与层数。
 
 - 内置预设（约 90 条 + 全职业通用的复原），可逐条启停；其余光环全手动绑定，完全自主可控。预设仅限正式服——其他客户端（ID 体系不同）自动停用。
-- 每条绑定可独立选择追踪单位：自身增益，或施放到敌对目标身上的减益。
-- 自动学习：脱战时扫描自身有时限的增益，匹配动作条上的同名技能自动绑定（按专精保存）。
+- 不选追踪单位：每条绑定自动同时挂「自身增益」与「施放到敌对目标的减益」两路，哪路命中显示哪路。
+- 自动学习：脱战时扫描自身有时限的增益与敌对目标身上的我方减益，匹配动作条上的技能自动绑定（按专精保存）。
 - 无持续时间的光环（形态/瞬发开关，如自然迅捷、幽魂之狼）不显示倒计时，仅以绿色半透明遮罩标记。
 - 绑定按专精分别保存；全局开关为角色级，一键控制全部显示。
 - 多条光环绑定同一按钮时自动合并显示，任一命中即显示。
@@ -33,8 +33,8 @@
 > 把光環 ID 綁定到快捷列按鈕，追蹤其剩餘時間與堆疊數量。
 
 - 內建預設（約 90 條 + 全職業通用的復原），可逐條啟停；其餘光環全手動綁定，完全自主可控。預設僅限正式服——其他用戶端（ID 體系不同）自動停用。
-- 每條綁定可獨立選擇追蹤單位：自身增益，或施放到敵對目標身上的減益。
-- 自動學習：脫戰時掃描自身有時限的增益，符合快捷列上同名技能的自動綁定（按專精保存）。
+- 不選追蹤單位：每條綁定自動同時掛「自身增益」與「施放到敵對目標的減益」兩路，哪路命中顯示哪路。
+- 自動學習：脫戰時掃描自身有時限的增益與敵對目標身上的我方減益，符合快捷列上技能的自動綁定（按專精保存）。
 - 無持續時間的光環（形態／瞬發開關，如自然迅捷、幽魂之狼）不顯示倒計時，僅以綠色半透明遮罩標記。
 - 綁定按專精分別保存；全域開關為角色級，一鍵控制全部顯示。
 - 多條光環綁定同一按鈕時自動合併顯示，任一命中即顯示。
