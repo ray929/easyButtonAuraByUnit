@@ -14,9 +14,22 @@
 --       filter="HARMFUL|PLAYER"（|PLAYER=只追踪玩家自己施放的，2026-08-19 烈焰震击踩坑）
 --   武器附魔预设：{ class = "SHAMAN", enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" }
 --     · 走 GetWeaponEnchantInfo 战斗安全通道（独立覆盖层 + 1 秒 ticker）
+--   无持续时间光环预设：{ auraSpellID = 378081, actionSpellID = 378081, overlayOnly = true }
+--     · 形态/瞬发开关类光环没有持续时间可显示：不挂倒计时框/层数，仅以绿色半透明
+--       遮罩标记按钮（光环存在时按钮由暴雪显示，遮罩随按钮显隐）。
 
 local B = EasyButtonAuraByUnit
 if not B then return end
+
+-- 预设仅限正式服（Retail）：永恒（Camelot）等客户端的法术/光环 ID 体系与正式服不一致，
+-- 直接套用会错绑（用户 2026-10-09 指定：所有预设含复原都只在正式服启用，永恒的 ID 后续再挖掘）。
+-- 非正式服时清空预设表 → 配置界面「预设」区为空、学习扫描的 preset 覆盖检查自然失效。
+if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
+    B.PRESET_DATA = {}
+    return
+end
+
+-- 全职业通用（class = nil，靠 IsPlayerSpell 门禁自动筛选）+ 无持续时间光环，见下方表内注释
 
 -- 嗜血/英勇家族：不同职业的引导技能不同，但施放到全队身上的增益本质是同一个效果
 -- （嗜血 2825 / 英勇 32182 / 时间扭曲 80353 / 远古狂暴 90355 / 原始狂怒 264667 / 化身巨龙之怒 390386）。
@@ -25,6 +38,11 @@ if not B then return end
 local LUST_AURAS = { 2825, 32182, 80353, 90355, 264667, 390386 }
 
 B.PRESET_DATA = {
+    -- 全职业通用（复原：光环 1231418 → 技能 1231411，所有职业的公用技能）
+    { auraSpellID = 1231418, actionSpellID = 1231411 },
+    -- 无持续时间光环（overlayOnly）：不显示倒计时/层数，仅绿色遮罩标记
+    { auraSpellID = 378081, actionSpellID = 378081, overlayOnly = true }, -- 自然迅捷（无持续时间）
+    { auraSpellID = 2645,  actionSpellID = 2645,  overlayOnly = true },  -- 幽魂之狼（形态）
     -- 嗜血/英勇家族（萨满两个引导技能按阵营二选一：部落嗜血 2825 / 联盟英勇 32182；
     -- 未学的那个被 IsPlayerSpell 门自动停用，条目保留是为了两阵营通用）
     { class = "SHAMAN", auraSpellID = LUST_AURAS, actionSpellID = 2825 },   -- 嗜血（部落）

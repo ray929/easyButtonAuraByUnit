@@ -122,6 +122,8 @@ B.Style = {
     GLOW_SELF        = { 0.00, 0.70, 0.00 },                    -- 柔光（自身）：绿（CDMButtonAuras 同款）
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
     GLOW_ALPHA       = 0.5,
+    MASK_COLOR       = { 0.20, 1.00, 0.20 },                    -- 无持续时间光环的绿色遮罩（overlayOnly 预设）
+    MASK_ALPHA       = 0.4,
 }
 
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
@@ -899,6 +901,17 @@ end
 --          不读任何存在性信号。
 local function SetupAuraButton(p, btn)
     btn:SetAllPoints(p.container)
+    if p.overlayOnly then
+        -- 无持续时间光环（形态/瞬发开关）：不挂倒计时框与层数，仅绿色半透明遮罩标记。
+        -- 遮罩挂在 AuraButton 上随暴雪显隐（有光环→显示，无光环→隐藏），不读任何存在性信号。
+        local mask = btn:CreateTexture(nil, "OVERLAY")
+        mask:SetAllPoints(btn)
+        local mc = B.Style.MASK_COLOR
+        mask:SetColorTexture(mc[1], mc[2], mc[3], B.Style.MASK_ALPHA)
+        p.mask = mask
+        p.auraButton = btn
+        return
+    end
     local cd = CreateFrame("Cooldown", nil, btn)
     cd:SetDrawSwipe(false)
     cd:SetDrawEdge(false)
@@ -1184,7 +1197,7 @@ local function RebuildGroups()
     if not B.IsEnabled() then return end
 
     local merged, order = {}, {}
-    local function addGroup(unit, filter, actionSpellID, auraID)
+    local function addGroup(unit, filter, actionSpellID, auraID, overlayOnly)
         local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionSpellID)
         local g = merged[key]
         if not g then
@@ -1193,6 +1206,7 @@ local function RebuildGroups()
             order[#order + 1] = g
         end
         g.auraIDs[auraID] = true
+        if overlayOnly then g.overlayOnly = true end
     end
 
     -- 手动绑定：双通道自动展开
@@ -1234,7 +1248,7 @@ local function RebuildGroups()
                 local unit = e.unit or "player"
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
                 for _, id in ipairs(ids) do
-                    addGroup(unit, filter, e.actionSpellID, id)
+                    addGroup(unit, filter, e.actionSpellID, id, e.overlayOnly)
                 end
             end
         end
