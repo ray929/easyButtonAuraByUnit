@@ -6,11 +6,12 @@
 -- 每条预设可在配置窗口（/babu）的「预设」区逐条启用/禁用（专精级存档）。
 --
 -- 条目格式：
---   光环预设：{ class = "WARRIOR", specID = 254, auraSpellID = 1160, actionSpellID = 1160,
+--   光环预设：{ class = "WARRIOR", auraSpellID = 1160, actionSpellID = 1160,
 --               unit = "target", filter = "HARMFUL|PLAYER" }
 --     · auraSpellID：要追踪的光环法术 ID（单个 number 或 {id1,id2} 数组，任一命中即显示）
 --     · actionSpellID：显示到哪个技能按钮（该技能必须放在动作条上）
---     · class 可选：限定职业（nil = 全职业通用）；specID 可选：限定专精（如 254 = 射击猎）
+--     · class 可选：限定职业（nil = 全职业通用）。不做专精过滤（2026-10-09 用户决策：
+--       专精归属多版本变迁容易写错，如爆炸射击现仅生存猎；启停存档按专精保存已够用）
 --     · unit/filter 可选：默认 player + HELPFUL；目标减益必须写 unit="target" +
 --       filter="HARMFUL|PLAYER"（|PLAYER=只追踪玩家自己施放的，2026-08-19 烈焰震击踩坑）
 --   武器附魔预设：{ class = "SHAMAN", enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" }
@@ -76,7 +77,7 @@ B.PRESET_DATA = {
     { class = "HUNTER", auraSpellID = 34477, actionSpellID = 34477 },    -- 误导(生效前)
     { class = "HUNTER", auraSpellID = 35079, actionSpellID = 34477 },    -- 误导(生效后)
     { class = "HUNTER", auraSpellID = 257622, actionSpellID = 257620 },  -- 技巧射击绑多重射击
-    { class = "HUNTER", specID = 254, auraSpellID = 6197, actionSpellID = 6197 }, -- 鹰眼术（12.x 射击专精限定）
+    { class = "HUNTER", auraSpellID = 6197, actionSpellID = 6197 },      -- 鹰眼术
     { class = "HUNTER", auraSpellID = 321297, actionSpellID = 321297 },  -- 野兽之眼
     -- 武僧 MONK（减伤/爆发）
     { class = "MONK", auraSpellID = 122278, actionSpellID = 122278 },    -- 躯不坏（减伤）
