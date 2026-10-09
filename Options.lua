@@ -634,6 +634,10 @@ end
 function B.ShowConfigFrame()
     if InCombatLockdown() then return end
     if not configFrame then BuildConfigFrame() end
+    -- Easy 系配置窗口互斥：收起其他插件的配置窗口（经共享 MinimapHub 协调）
+    if EasyMinimapHub and EasyMinimapHub.NotifyConfigFrameShown then
+        EasyMinimapHub.NotifyConfigFrameShown(configFrame)
+    end
     configFrame:Show()
 end
 
@@ -644,7 +648,11 @@ function B.ToggleConfigFrame()
     if configFrame:IsShown() then
         configFrame:Hide()
     else
-        configFrame:Show()
+        -- Easy 系配置窗口互斥：收起其他插件的配置窗口（经共享 MinimapHub 协调）
+    if EasyMinimapHub and EasyMinimapHub.NotifyConfigFrameShown then
+        EasyMinimapHub.NotifyConfigFrameShown(configFrame)
+    end
+    configFrame:Show()
     end
 end
 
