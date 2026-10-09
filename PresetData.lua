@@ -15,8 +15,8 @@
 --   武器附魔预设：{ class = "SHAMAN", enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" }
 --     · 走 GetWeaponEnchantInfo 战斗安全通道（独立覆盖层 + 1 秒 ticker）
 --   无持续时间光环预设：{ auraSpellID = 378081, actionSpellID = 378081, overlayOnly = true }
---     · 形态/瞬发开关类光环没有持续时间可显示：不挂倒计时框/层数，仅以绿色半透明
---       遮罩标记按钮（光环存在时按钮由暴雪显示，遮罩随按钮显隐）。
+--     · 形态/瞬发开关类光环没有持续时间可显示：不挂倒计时框/层数，存在标记与其他
+--       光环同款（CDMButtonAuras 柔光，自身=绿），随暴雪按钮显隐。
 
 local B = EasyButtonAuraByUnit
 if not B then return end

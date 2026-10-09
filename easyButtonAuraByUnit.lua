@@ -122,8 +122,6 @@ B.Style = {
     GLOW_SELF        = { 0.00, 0.70, 0.00 },                    -- 柔光（自身）：绿（CDMButtonAuras 同款）
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
     GLOW_ALPHA       = 0.5,
-    MASK_COLOR       = { 0.20, 1.00, 0.20 },                    -- 无持续时间光环的绿色遮罩（overlayOnly 预设）
-    MASK_ALPHA       = 0.4,
 }
 
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
@@ -902,13 +900,15 @@ end
 local function SetupAuraButton(p, btn)
     btn:SetAllPoints(p.container)
     if p.overlayOnly then
-        -- 无持续时间光环（形态/瞬发开关）：不挂倒计时框与层数，仅绿色半透明遮罩标记。
-        -- 遮罩挂在 AuraButton 上随暴雪显隐（有光环→显示，无光环→隐藏），不读任何存在性信号。
-        local mask = btn:CreateTexture(nil, "OVERLAY")
-        mask:SetAllPoints(btn)
-        local mc = B.Style.MASK_COLOR
-        mask:SetColorTexture(mc[1], mc[2], mc[3], B.Style.MASK_ALPHA)
-        p.mask = mask
+        -- 无持续时间光环（形态/瞬发开关）：不挂倒计时框与层数。
+        -- 存在标记与其他光环完全一致——CDMButtonAuras 同款柔光材质（ADD 混合，自身=绿）。
+        local glow = btn:CreateTexture(nil, "ARTWORK")
+        glow:SetAllPoints(btn)
+        glow:SetTexture(B.OVERLAY_TEXTURE)
+        glow:SetBlendMode("ADD")
+        local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
+        glow:SetVertexColor(c[1], c[2], c[3], B.Style.GLOW_ALPHA)
+        p.glow = glow
         p.auraButton = btn
         return
     end
