@@ -5,7 +5,7 @@
 ## Notes-zhTW: 手動綁定光環 ID 到快捷列按鈕，或啟用內建預設；按鈕上顯示光環剩餘時間、堆疊數量與柔光標記。
 ## Author: ray929
 ## Version: @project-version@
-## SavedVariablesPerCharacter: easyButtonAuraByUnitDB
+## SavedVariablesPerCharacter: easyButtonAuraByUnitDB EasyMinimapHubDB
 ## DefaultState: enabled
 ## Category: Action Bars
 ## Category-zhCN: 动作条
@@ -16,3 +16,4 @@
 easyButtonAuraByUnit.lua
 PresetData.lua
 Options.lua
+MinimapHub.lua
