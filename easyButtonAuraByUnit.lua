@@ -609,14 +609,22 @@ local function ScanLearnableAuras(verbose)
                 elseif LearnAlreadyCovered(spellID, seen) then
                     log("%s (%d): already covered by preset/learned, skipped", data.name, spellID)
                 else
-                    -- 匹配动作条技能：优先同 ID，退而求其次按名字找（命中不同 ID 的按钮也算）
-                    local actionSpellID = buttonMap[spellID]
-                    local matchPath = "id"
-                    if not actionSpellID and data.name and not IsSecret(data.name) then
+                    -- 匹配动作条技能：优先同 ID——buttonMap 的值是按钮名，键命中即说明该法术 ID 在条上，
+                    -- 动作法术 ID 就是光环 ID 本身；退而求其次按名字找按钮，再取按钮上的法术 ID
+                    -- （注意 GetActionInfo 第二个返回值才是 ID；曾把按钮名/atype 误当 spellID 传给
+                    -- IsPlayerSpell → 12.x 弃用包装内部 C_SpellBook.IsSpellKnown 收到非数字直接报错，
+                    -- 整轮扫描被 pcall 吞掉静默失败——自动学习从未工作过的根因）
+                    local actionSpellID
+                    local matchPath
+                    if buttonMap[spellID] then
+                        actionSpellID = spellID
+                        matchPath = "id"
+                    elseif data.name and not IsSecret(data.name) then
                         local btn = FindActionButtonForSpellName(data.name)
                         if btn and btn.action ~= nil then
-                            local _, aid = pcall(GetActionInfo, btn.action)
-                            if aid and aid > 0 and not IsSecret(aid) then
+                            local okA, atype, aid = pcall(GetActionInfo, btn.action)
+                            if okA and atype == "spell" and type(aid) == "number"
+                                and aid > 0 and not IsSecret(aid) then
                                 actionSpellID = aid
                                 matchPath = "name"
                             end
@@ -625,9 +633,9 @@ local function ScanLearnableAuras(verbose)
                     if not actionSpellID then
                         log("%s (%d): no matching action bar spell (buttonMap/name both miss), skipped",
                             data.name, spellID)
-                    elseif not IsPlayerSpell(actionSpellID) then
-                        log("%s (%d): button spell %d is not a player spell, skipped",
-                            data.name, spellID, actionSpellID)
+                    elseif type(actionSpellID) ~= "number" or not IsPlayerSpell(actionSpellID) then
+                        log("%s (%d): button spell %s is not a player spell, skipped",
+                            data.name, spellID, tostring(actionSpellID))
                     else
                         learned[#learned + 1] = {
                             auraID = spellID,
