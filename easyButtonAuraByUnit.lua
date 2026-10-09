@@ -778,13 +778,16 @@ local function ScanLearnableAuras(verbose)
                     log("aura @%d: spellId missing/secret, skipped", index - 1)
                 elseif not exp or IsSecret(exp) or exp <= 0 then
                     log("%s (%s): no expiration (passive/form), skipped", tostring(data.name), tostring(spellID))
-                elseif srcUnit ~= "player" or IsSecret(srcUnit) then
-                    log("%s (%s): sourceUnit=%s, not self-cast, skipped",
-                        tostring(data.name), tostring(spellID), tostring(srcUnit))
                 elseif B.IsAuraManuallyBound(spellID) then
                     log("%s (%d): already manually bound (manual takes precedence), skipped", data.name, spellID)
                 elseif LearnAlreadyCovered(spellID, seen) then
                     log("%s (%d): already covered by preset/learned, skipped", data.name, spellID)
+                elseif srcUnit ~= "player" or IsSecret(srcUnit) then
+                    -- 来源判断放在覆盖判断之后：预设收编的光环（如宠物施放的原始暴怒 264667）
+                    -- 先按 covered 报告真实归属，避免「not self-cast」误导排查方向。
+                    -- 学习仍然只收自己施放的：宠物/队友替你挂的 aura 由预设/手动负责显示。
+                    log("%s (%s): sourceUnit=%s, not self-cast, skipped",
+                        tostring(data.name), tostring(spellID), tostring(srcUnit))
                 else
                     -- 匹配动作条技能：优先同 ID——buttonMap 的值是按钮名，键命中即说明该法术 ID 在条上，
                     -- 动作法术 ID 就是光环 ID 本身；退而求其次按名字找按钮，再取按钮上的法术 ID
@@ -1017,11 +1020,6 @@ end
 
 local function UpdateAuraGroup(p)
     if not p.actionSpellID or not next(p.auraIDs) then return end
-    -- 玩家没学该施放技能（切专精后技能不可用）→ 清理残留并跳过
-    if not IsPlayerSpell(p.actionSpellID) then
-        DeactivateGroup(p)
-        return
-    end
     -- 目标类绑定只在敌对目标身上生效：友方目标（或无目标）时停用，
     -- 防止 includeSpellIDs 被暴雪在 HARMFUL 通道忽略后误匹配任意减益。
     if p.unit == "target" then
@@ -1040,8 +1038,17 @@ local function UpdateAuraGroup(p)
 
     -- 解析显示目标按钮（缓存+自愈验证，找不到时 ticker 定期重试；该技能必须放在动作条上）
     local btn = ResolveButton(p, p.actionSpellID)
+    -- 「玩家没学该施放技能 → 清理残留」的判定放宽为：条上有该技能按钮也算会。
+    -- 原因：宠物替换技能（猎人原始暴怒 272678，由宠物掌控 272651 在召唤狂野系
+    -- 宠物时替换而来）不在玩家已学法术表里，IsPlayerSpell 为假，但按钮被游戏
+    -- 替换到条上即代表可施放；切专精后按钮消失/换名，自愈验证会使其返回 nil，
+    -- 此时才真正按未学处理。
     if not btn then
-        container:Hide()
+        if not IsPlayerSpell(p.actionSpellID) then
+            DeactivateGroup(p)
+        else
+            container:Hide()
+        end
         return
     end
     if not PositionContainer(container, btn, p) then
