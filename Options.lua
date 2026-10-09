@@ -137,8 +137,9 @@ end
 local function CreateRow(index)
     local row = CreateFrame("Frame", nil, configFrame.rows)
     row:SetSize(ROW_W, ROW_H)
-    -- 与自动学习/预设行同缩进（row x=30 → 图标 x≈34 对齐学习行图标）
-    row:SetPoint("TOPLEFT", 30, -(index - 1) * ROW_H)
+    -- 行左缘与自动学习/预设行同列（rows x=4）；图标（LEFT 4）恰好落在「手动配置」标题列
+    -- （rows 窗口 x=28 + 4 = 32 = 标题 x）——用户要求配置项与标题对齐
+    row:SetPoint("TOPLEFT", 4, -(index - 1) * ROW_H)
 
     -- 图标（悬停显示光环法术提示）
     row.icon = CreateFrame("Button", nil, row)
@@ -387,7 +388,8 @@ end
 -- 手动行数 / 学习表变化时，重排滚动区内的动态区段（添加按钮 / 自动学习 / 内置预设）
 local function LayoutScrollContent(count)
     local y = count * ROW_H
-    configFrame.addBtn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 30, -(y + 4))
+    -- 添加按钮左缘（rows x=8 → 窗口 32）与「手动配置」标题列对齐
+    configFrame.addBtn:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -(y + 4))
 
     -- 分割线1 + 自动学习区标题行（控件横向链式锚定，随本地化文字长度自适应）
     local dy1 = y + ADD_ROW_H + 8
@@ -512,19 +514,20 @@ local function BuildConfigFrame()
     local titleText = (configFrame.TitleContainer and configFrame.TitleContainer.TitleText) or configFrame.TitleText
     if titleText then titleText:SetText(ADDON_TITLE) end
 
-    -- 标题栏下分割线（与窗口内三段分割线同款，三窗统一）
+    configFrame.specText = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    configFrame.specText:SetPoint("TOPLEFT", 16, -36)
+
+    -- 头部分割线：在「当前专精」行（含右侧全局启用复选框，底 -58）下方，
+    -- 分隔固定头部与滚动区。用户澄清：分割线在总标题「当前专精…」下面，不是标题栏下面。
     configFrame.divTitle = configFrame:CreateTexture(nil, "ARTWORK")
     configFrame.divTitle:SetColorTexture(0.7, 0.7, 0.7, 0.35)
     configFrame.divTitle:SetSize(PANEL_W - 24, 1)
-    configFrame.divTitle:SetPoint("TOPLEFT", 12, -31)
-
-    configFrame.specText = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    configFrame.specText:SetPoint("TOPLEFT", 16, -36)
+    configFrame.divTitle:SetPoint("TOPLEFT", 12, -64)
 
     -- 「手动配置」区标题（固定头部；不再放说明文字——用户指定去掉）。
     -- x 与滚动区内「自动学习 / 内置预设」区标题对齐（scroll x=24 + rows 内标题 x=8 = 32）
     configFrame.manualHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    configFrame.manualHeader:SetPoint("TOPLEFT", configFrame.specText, "BOTTOMLEFT", 16, -8)
+    configFrame.manualHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -70)
     configFrame.manualHeader:SetText(L("SECTION_MANUAL"))
 
     -- 全局启用开关（角色级、不分专精；窗口右上角，标签锚在复选框左侧防越界）
@@ -545,8 +548,8 @@ local function BuildConfigFrame()
 
     -- 列表区：固定高度的滚动区（行数超过可见行数时出现滚动条，支持鼠标滚轮）
     configFrame.scroll = CreateFrame("ScrollFrame", "EasyButtonAuraByUnitConfigScroll", configFrame, "UIPanelScrollFrameTemplate")
-    -- 锚到窗口固定坐标：manualHeader 右移对齐后，scroll 须保持原 x=24，行/区标题几何才不变
-    configFrame.scroll:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 24, -84)
+    -- 锚到窗口固定坐标：manualHeader 移到分割线下（y=-70，高≈12）后，scroll 顶随之下移
+    configFrame.scroll:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 24, -92)
     configFrame.scroll:SetSize(ROW_W, LIST_H)
     configFrame.scroll:EnableMouseWheel(true)
     configFrame.scroll:SetScript("OnMouseWheel", function(self, delta)

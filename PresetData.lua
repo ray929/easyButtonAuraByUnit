@@ -18,7 +18,21 @@
 local B = EasyButtonAuraByUnit
 if not B then return end
 
+-- 嗜血/英勇家族：不同职业的引导技能不同，但施放到全队身上的增益本质是同一个效果
+-- （嗜血 2825 / 英勇 32182 / 时间扭曲 80353 / 远古狂暴 90355 / 原始狂怒 264667 / 化身巨龙之怒 390386）。
+-- 任一命中即显示 → 用同一个光环 ID 集合；actionSpellID 指向本职业的施放技能按钮。
+-- filter 用缺省 HELPFUL（不加 |PLAYER）：队友施放的英勇同样显示（倒计时参考价值一致）。
+local LUST_AURAS = { 2825, 32182, 80353, 90355, 264667, 390386 }
+
 B.PRESET_DATA = {
+    -- 嗜血/英勇家族（萨满两个引导技能按阵营二选一：部落嗜血 2825 / 联盟英勇 32182；
+    -- 未学的那个被 IsPlayerSpell 门自动停用，条目保留是为了两阵营通用）
+    { class = "SHAMAN", auraSpellID = LUST_AURAS, actionSpellID = 2825 },   -- 嗜血（部落）
+    { class = "SHAMAN", auraSpellID = LUST_AURAS, actionSpellID = 32182 },  -- 英勇（联盟）
+    { class = "MAGE",   auraSpellID = LUST_AURAS, actionSpellID = 80353 },  -- 时间扭曲
+    { class = "EVOKER", auraSpellID = LUST_AURAS, actionSpellID = 390386 }, -- 化身巨龙之怒
+    { class = "HUNTER", auraSpellID = LUST_AURAS, actionSpellID = 264667 }, -- 原始狂怒（宠物施放；按钮不在玩家动作条上则自动不显示）
+
     -- 死亡骑士 DEATHKNIGHT（减伤/爆发；光环=技能同ID）
     { class = "DEATHKNIGHT", auraSpellID = 48792, actionSpellID = 48792 },  -- 冰封之韧（减伤）
     { class = "DEATHKNIGHT", auraSpellID = 48707, actionSpellID = 48707 },  -- 反魔法护罩（减伤）

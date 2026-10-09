@@ -517,6 +517,20 @@ local function HasHostileTarget()
     return not (okF and friendly and friendly ~= false)
 end
 
+-- 内置预设是否覆盖某光环 ID（学习条目被预设收编时：运行时让位 + 扫描时清理旧条目）
+local function PresetCoversAura(auraID)
+    for _, e in ipairs(B.PRESET_DATA or {}) do
+        if type(e.auraSpellID) == "table" then
+            for _, id in ipairs(e.auraSpellID) do
+                if id == auraID then return true end
+            end
+        elseif e.auraSpellID == auraID then
+            return true
+        end
+    end
+    return false
+end
+
 local function LearnAlreadyCovered(auraID, seen)
     if seen[auraID] then return true end
     for _, cfg in ipairs(B.GetList()) do
@@ -569,9 +583,22 @@ local function ScanLearnableAuras(verbose)
     end
 
     local learned = B.GetLearnedList()
+    -- 预设收编清理：某光环家族转为内置预设后（如英勇/嗜血家族），删除学习表中被
+    -- 预设覆盖的旧条目——预设语义更合适（家族共享 + 队友施放也显示），学习条目纯冗余
+    local pruned = 0
+    for i = #learned, 1, -1 do
+        local e = learned[i]
+        if e and e.auraID and PresetCoversAura(e.auraID) then
+            table.remove(learned, i)
+            pruned = pruned + 1
+        end
+    end
     local seen = {}
     for _, e in ipairs(learned) do
         seen[e.auraID] = true
+    end
+    if pruned > 0 and report then
+        log("pruned %d learned entries now covered by presets", pruned)
     end
 
     local buttonMap = B.BuildSpellButtonMap()
@@ -657,7 +684,7 @@ local function ScanLearnableAuras(verbose)
         end
     end
 
-    if added > 0 then
+    if added > 0 or pruned > 0 then
         B.NotifyBindingsChanged()   -- 刷新面板 + 重建容器（战斗外才可能走到这）
     end
     if report then
@@ -1044,12 +1071,13 @@ local function RebuildGroups()
 
     -- 自动学习表（专精级；总开关 + 单条停用）：player 条目走增益通道，
     -- target 条目（敌对目标身上我方减益）走减益通道。
-    -- 优先级：手动绑定 > 学习条目——光环 ID 已被当前专精手动绑定的学习条目跳过
-    -- （不删除：本专精删掉手动绑定后学习条目自动恢复；其他专精不受影响）
+    -- 优先级：手动绑定 > 内置预设 > 学习条目——光环 ID 已被手动绑定或预设覆盖的
+    -- 学习条目跳过（不删除；手动绑定删掉后自动恢复，预设收编的在下次扫描时清理）
     if B.IsLearnEnabled() then
         for _, e in ipairs(B.GetLearnedList()) do
             if not e.disabled and e.auraID and e.actionSpellID
-                and not B.IsAuraManuallyBound(e.auraID) then
+                and not B.IsAuraManuallyBound(e.auraID)
+                and not PresetCoversAura(e.auraID) then
                 local unit = e.unit or "player"
                 local filter = (unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
                 addGroup(unit, filter, e.actionSpellID, e.auraID)
@@ -1243,6 +1271,30 @@ end)
 -- =========================================================
 -- slash 命令：/babu 打开配置窗口（实现在 Options.lua）
 -- =========================================================
+-- 诊断：转储运行时组状态（容器是否创建/可见、按钮解析到没有）——排查「学了/预设了但按钮上没数字」
+function B.DumpGroupsVerbose()
+    local out = {}
+    out[#out + 1] = ("groups=%d enchants=%d enabled=%s combat=%s"):format(
+        #B.groups, #B.enchants, tostring(B.IsEnabled()), tostring(InCombatLockdown()))
+    for i, p in ipairs(B.groups) do
+        local auras = {}
+        for id in pairs(p.auraIDs or {}) do auras[#auras + 1] = tostring(id) end
+        table.sort(auras)
+        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s auras=[%s] container=%s btn=%s initFailed=%s"):format(
+            i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
+            table.concat(auras, ","),
+            p.container and (p.container:IsShown() and "shown" or "hidden") or "nil",
+            p.button and p.button:GetName() or "nil",
+            tostring(p._initFailed))
+    end
+    for i, p in ipairs(B.enchants) do
+        out[#out + 1] = ("enchant %d: id=%s spell=%s overlay=%s"):format(
+            i, tostring(p.enchantID), tostring(p.actionSpellID),
+            p.overlay and (p.overlay:IsShown() and "shown" or "hidden") or "nil")
+    end
+    return out
+end
+
 SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
 SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
     msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
@@ -1252,6 +1304,14 @@ SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
             for _, line in ipairs(B.RunLearnScanVerbose()) do
                 print("|cffE8BC75[babu]|r " .. line)
             end
+        end
+        return
+    end
+    if msg == "debug" then
+        if InCombatLockdown() then return end
+        RebuildGroups()   -- 先重建一遍，转储的就是当前真实状态
+        for _, line in ipairs(B.DumpGroupsVerbose()) do
+            print("|cffE8BC75[babu]|r " .. line)
         end
         return
     end
