@@ -330,9 +330,11 @@ end
 -- 当前职业可用的预设列表（含 class=nil 的种族预设）：{ { key = 序号, e = 条目 } }
 function B.GetClassPresetList()
     local _, classToken = UnitClass("player")
+    local specID = GetCurrentSpecID()
     local out = {}
     for i, e in ipairs(B.PRESET_DATA or {}) do
-        if not e.class or e.class == classToken then
+        if (not e.class or e.class == classToken)
+            and (not e.specID or e.specID == specID) then
             out[#out + 1] = { key = i, e = e }
         end
     end
@@ -657,13 +659,21 @@ end
 
 -- 内置预设是否覆盖某光环 ID（学习条目被预设收编时：运行时让位 + 扫描时清理旧条目）
 local function PresetCoversAura(auraID)
-    for _, e in ipairs(B.PRESET_DATA or {}) do
-        if type(e.auraSpellID) == "table" then
-            for _, id in ipairs(e.auraSpellID) do
-                if id == auraID then return true end
+    -- 只让位于「本职业本专精、且未被用户禁用」的预设：预设关掉时学习条目应恢复显示，
+    -- 否则会出现预设关了、学习条目又让位、光环彻底消失的空窗。
+    local _, classToken = UnitClass("player")
+    local specID = GetCurrentSpecID()
+    for i, e in ipairs(B.PRESET_DATA or {}) do
+        if (not e.class or e.class == classToken)
+            and (not e.specID or e.specID == specID)
+            and B.IsPresetEnabled(i) then
+            if type(e.auraSpellID) == "table" then
+                for _, id in ipairs(e.auraSpellID) do
+                    if id == auraID then return true end
+                end
+            elseif e.auraSpellID == auraID then
+                return true
             end
-        elseif e.auraSpellID == auraID then
-            return true
         end
     end
     return false
@@ -1244,10 +1254,13 @@ local function RebuildGroups()
         end
     end
 
-    -- 内置预设：按当前职业过滤 + 逐条启停（key = PresetData.lua 中的序号）
+    -- 内置预设：按当前职业 + 专精过滤 + 逐条启停（key = PresetData.lua 中的序号）
     local _, classToken = UnitClass("player")
+    local curSpecID = GetCurrentSpecID()
     for key, e in ipairs(B.PRESET_DATA or {}) do
-        if (not e.class or e.class == classToken) and B.IsPresetEnabled(key) then
+        if (not e.class or e.class == classToken)
+            and (not e.specID or e.specID == curSpecID)
+            and B.IsPresetEnabled(key) then
             if e.enchantID then
                 B.enchants[#B.enchants + 1] = {
                     enchantID = e.enchantID,

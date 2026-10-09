@@ -6,10 +6,11 @@
 -- 每条预设可在配置窗口（/babu）的「预设」区逐条启用/禁用（专精级存档）。
 --
 -- 条目格式：
---   光环预设：{ class = "WARRIOR", auraSpellID = 1160, actionSpellID = 1160,
+--   光环预设：{ class = "WARRIOR", specID = 254, auraSpellID = 1160, actionSpellID = 1160,
 --               unit = "target", filter = "HARMFUL|PLAYER" }
 --     · auraSpellID：要追踪的光环法术 ID（单个 number 或 {id1,id2} 数组，任一命中即显示）
 --     · actionSpellID：显示到哪个技能按钮（该技能必须放在动作条上）
+--     · class 可选：限定职业（nil = 全职业通用）；specID 可选：限定专精（如 254 = 射击猎）
 --     · unit/filter 可选：默认 player + HELPFUL；目标减益必须写 unit="target" +
 --       filter="HARMFUL|PLAYER"（|PLAYER=只追踪玩家自己施放的，2026-08-19 烈焰震击踩坑）
 --   武器附魔预设：{ class = "SHAMAN", enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" }
@@ -41,8 +42,9 @@ B.PRESET_DATA = {
     -- 全职业通用（复原：光环 1231418 → 技能 1231411，所有职业的公用技能）
     { auraSpellID = 1231418, actionSpellID = 1231411 },
     -- 无持续时间光环（overlayOnly）：不显示倒计时/层数，仅绿色遮罩标记
-    { auraSpellID = 378081, actionSpellID = 378081, overlayOnly = true }, -- 自然迅捷（无持续时间）
-    { auraSpellID = 2645,  actionSpellID = 2645,  overlayOnly = true },  -- 幽魂之狼（形态）
+    -- （均为萨满专属：378081 Wowhead Requires Shaman；2645 为萨满形态）
+    { class = "SHAMAN", auraSpellID = 378081, actionSpellID = 378081, overlayOnly = true }, -- 自然迅捷（无持续时间）
+    { class = "SHAMAN", auraSpellID = 2645,  actionSpellID = 2645,  overlayOnly = true },  -- 幽魂之狼（形态）
     -- 嗜血/英勇家族（萨满两个引导技能按阵营二选一：部落嗜血 2825 / 联盟英勇 32182；
     -- 未学的那个被 IsPlayerSpell 门自动停用，条目保留是为了两阵营通用）
     { class = "SHAMAN", auraSpellID = LUST_AURAS, actionSpellID = 2825 },   -- 嗜血（部落）
@@ -70,7 +72,7 @@ B.PRESET_DATA = {
     { class = "HUNTER", auraSpellID = 34477, actionSpellID = 34477 },    -- 误导(生效前)
     { class = "HUNTER", auraSpellID = 35079, actionSpellID = 34477 },    -- 误导(生效后)
     { class = "HUNTER", auraSpellID = 257622, actionSpellID = 257620 },  -- 技巧射击绑多重射击
-    { class = "HUNTER", auraSpellID = 6197, actionSpellID = 6197 },      -- 鹰眼术
+    { class = "HUNTER", specID = 254, auraSpellID = 6197, actionSpellID = 6197 }, -- 鹰眼术（12.x 射击专精限定）
     { class = "HUNTER", auraSpellID = 321297, actionSpellID = 321297 },  -- 野兽之眼
     -- 武僧 MONK（减伤/爆发）
     { class = "MONK", auraSpellID = 122278, actionSpellID = 122278 },    -- 躯不坏（减伤）
