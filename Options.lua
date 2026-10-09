@@ -5,7 +5,7 @@
 --   1. 暴雪插件设置里的【占位页】：标题（金色大字，与插件图标同色系）+ 提示 + 按钮，
 --      点按钮打开自有配置窗口。
 --   2. 【自有配置窗口】：
---      · 固定头部：当前专精 + 「手动配置」区标题（不再放说明文字）。
+--      · 固定头部：当前职业 + 配置专精 + 「手动配置」区标题（不再放说明文字）。
 --      · 滚动区三段：
 --        - 手动绑定：每行 = 图标 + 光环[输入框] + 绑定技能[输入框] + 状态 + 删除
 --          （单行紧凑；追踪单位自动识别，主文件对每条绑定同时挂 player/target 两路）。
@@ -423,7 +423,11 @@ end
 local function DoRefresh()
     if not configFrame then return end
 
-    configFrame.specText:SetText(L("SPEC_LABEL") .. ": " .. B.GetCurrentSpecName())
+    -- 头部信息行：当前职业（预设按职业过滤）+ 配置专精（存档槽位）。
+    -- 用户 2026-10-09 指出：预设是职业过滤，只显示「当前专精」会误导；两个维度分行/分列写清。
+    configFrame.specText:SetText(
+        L("CLASS_LABEL") .. ": " .. (UnitClass("player"))
+        .. "　　" .. L("SPEC_LABEL") .. ": " .. B.GetCurrentSpecName())
     if configFrame.enableCheck then
         configFrame.enableCheck:SetChecked(B.IsEnabled())
     end
@@ -530,7 +534,8 @@ local function BuildConfigFrame()
     configFrame.manualHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -70)
     configFrame.manualHeader:SetText(L("SECTION_MANUAL"))
 
-    -- 全局启用开关（角色级、不分专精；窗口右上角，标签锚在复选框左侧防越界）
+    -- 启用开关（专精级：只关当前专精的显示；整体关闭请禁用插件；
+    -- 窗口右上角，标签锚在复选框左侧防越界）
     configFrame.enableCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
     configFrame.enableCheck:SetSize(24, 24)
     configFrame.enableCheck:SetPoint("TOPRIGHT", -16, -34)

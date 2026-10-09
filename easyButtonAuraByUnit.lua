@@ -30,9 +30,10 @@ B.ADDON_NAME = ...
 -- =========================================================
 local LOCALES = {
     enUS = {
-        SPEC_LABEL        = "Current Specialization",
+        SPEC_LABEL        = "Config Spec",
+        CLASS_LABEL       = "Current Class",
         SPEC_UNKNOWN      = "Unknown",
-        ENABLE            = "Global Enable",
+        ENABLE            = "Enable",
         SECTION_MANUAL    = "Manual Bindings",
         SECTION_LEARNED   = "Auto-Learned (out-of-combat scan)",
         LEARN_ENABLE      = "Enable",
@@ -53,16 +54,17 @@ local LOCALES = {
         PRESET_HEADER     = "Built-in Presets",
     },
     zhCN = {
-        SPEC_LABEL        = "当前专精",
+        SPEC_LABEL        = "配置专精",
+        CLASS_LABEL       = "当前职业",
         SPEC_UNKNOWN      = "未知",
-        ENABLE            = "全局启用",
+        ENABLE            = "启用",
         SECTION_MANUAL    = "手动配置",
         SECTION_LEARNED   = "自动学习（脱战扫描）",
         LEARN_ENABLE      = "启用",
         LEARN_CLEAR       = "清空",
         LEARNED_TARGET_TAG = "（目标）",
         LEARN_SUPERSEDED  = "（已被手动绑定接管）",
-        LEARN_TIP         = "脱战时扫描自身增益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；可随时清空或整体关闭。",
+        LEARN_TIP         = "脱战时扫描自身增益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；开关与条目均按专精保存，可随时清空或关闭。",
         COL_AURA          = "光环",
         COL_SPELL_BIND    = "绑定技能",
         COL_SPELL         = "技能",
@@ -76,16 +78,17 @@ local LOCALES = {
         PRESET_HEADER     = "内置预设",
     },
     zhTW = {
-        SPEC_LABEL        = "目前專精",
+        SPEC_LABEL        = "配置專精",
+        CLASS_LABEL       = "目前職業",
         SPEC_UNKNOWN      = "未知",
-        ENABLE            = "全域啟用",
+        ENABLE            = "啟用",
         SECTION_MANUAL    = "手動配置",
         SECTION_LEARNED   = "自動學習（脫戰掃描）",
         LEARN_ENABLE      = "啟用",
         LEARN_CLEAR       = "清空",
         LEARNED_TARGET_TAG = "（目標）",
         LEARN_SUPERSEDED  = "（已被手動綁定接管）",
-        LEARN_TIP         = "脫戰時掃描自身增益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；可隨時清空或整體關閉。",
+        LEARN_TIP         = "脫戰時掃描自身增益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；開關與條目均按專精保存，可隨時清空或關閉。",
         COL_AURA          = "光環",
         COL_SPELL_BIND    = "綁定技能",
         COL_SPELL         = "技能",
@@ -185,14 +188,16 @@ function B.GetSpellIcon(spellID)
 end
 
 -- =========================================================
--- 存档：全局开关（角色级）+ 绑定列表 / 预设启停 / 自动学习表（按专精）
--- easyButtonAuraByUnitDB.enabled = true|false          （角色级，所有专精共用）
--- easyButtonAuraByUnitDB.specs[specID] = { list = { cfg... }, presets = { [key]=false... },
+-- 存档：全部配置都在专精级 specs[specID] 子表（2026-10-09 起启用/学习开关也下沉；
+-- 想整体关闭直接在插件列表禁用插件即可，无需保留角色级开关）
+-- easyButtonAuraByUnitDB.specs[specID] = { enabled = true|false, learnEnabled = true|false,
+--                                          list = { cfg... }, presets = { [key]=false... },
 --                                          learned = { entry... } }
+--   enabled：本专精显示开关（旧版角色级根字段仅在 SelectSpec 作为迁移种子读取）
+--   learnEnabled：本专精自动学习总开关（同上）
 --   cfg = { auraID = <光环 spellID>, bindSpell = <目标技能 spellID> }
 --     （不存 unit：运行时自动同时挂 player / target 两路，见 RebuildGroups）
 --   presets：预设禁用覆盖表——只记被关掉的条目（key = PresetData.lua 中的序号），缺省 = 启用
--- easyButtonAuraByUnitDB.learnEnabled = true|false     （角色级；自动学习总开关）
 -- specs[specID].learned = { { auraID=..., actionSpellID=..., unit=..., disabled=bool }... }
 --   自动学习表：脱战扫描当前形态下的光环 → 匹配动作条同名技能 自动生成的绑定（专精级——
 --   扫描的就是当前专精的 buff/debuff，各专精各学各的，共享 buff 玩到该专精时自然补学）。
@@ -212,18 +217,16 @@ end
 
 function B.InitStorage()
     easyButtonAuraByUnitDB = easyButtonAuraByUnitDB or {}
-    if easyButtonAuraByUnitDB.enabled == nil then
-        easyButtonAuraByUnitDB.enabled = true
-    end
-    if easyButtonAuraByUnitDB.learnEnabled == nil then
-        easyButtonAuraByUnitDB.learnEnabled = true
-    end
+    -- enabled / learnEnabled 已下沉为专精级（specs[specID] 子表）：
+    -- 根级旧字段仅作为迁移种子保留（见 SelectSpec），不再读写、不再设默认值。
     if not easyButtonAuraByUnitDB.specs then
         easyButtonAuraByUnitDB.specs = { [0] = { list = {} } }
     end
 end
 -- 全局开关（角色级；关闭 = 撤下全部容器与覆盖层）
 function B.IsEnabled()
+    if B.db then return B.db.enabled ~= false end
+    -- PLAYER_LOGIN 前尚未选择专精槽：回退读根级旧字段（迁移种子，语义不变）
     return easyButtonAuraByUnitDB and easyButtonAuraByUnitDB.enabled ~= false
 end
 
@@ -245,6 +248,14 @@ function B.SelectSpec(specID)
             specs[specID].learned = easyButtonAuraByUnitDB.learned
         end
         easyButtonAuraByUnitDB.learned = nil
+    end
+    -- 旧版迁移：enabled / learnEnabled 曾是角色级根字段 → 首次进入某专精槽时种入该槽
+    -- （根字段保留不清除：先建的槽先继承，之后新出现的专精槽也能从旧值继承）
+    if specs[specID].enabled == nil then
+        specs[specID].enabled = (easyButtonAuraByUnitDB.enabled ~= false)
+    end
+    if specs[specID].learnEnabled == nil then
+        specs[specID].learnEnabled = (easyButtonAuraByUnitDB.learnEnabled ~= false)
     end
     B.db = specs[specID]
     B.currentSpecID = specID
@@ -329,16 +340,16 @@ function B.GetClassPresetList()
 end
 
 -- =========================================================
--- 自动学习表（专精级；总开关 learnEnabled 为角色级）
+-- 自动学习表（专精级；总开关 learnEnabled 同为专精级）
 -- =========================================================
 function B.IsLearnEnabled()
-    B.InitStorage()
-    return easyButtonAuraByUnitDB.learnEnabled ~= false
+    if B.db then return B.db.learnEnabled ~= false end
+    return easyButtonAuraByUnitDB and easyButtonAuraByUnitDB.learnEnabled ~= false
 end
 
 function B.SetLearnEnabled(v)
-    B.InitStorage()
-    easyButtonAuraByUnitDB.learnEnabled = v and true or false
+    B.SelectSpec()
+    B.db.learnEnabled = v and true or false
     B.NotifyBindingsChanged()
 end
 
@@ -1296,10 +1307,10 @@ function B.NotifyBindingsChanged()
     ScheduleRebuild(0.2)
 end
 
--- 全局开关（Options 复选框调用）
+-- 启用开关（专精级；Options 复选框调用）
 function B.SetEnabled(v)
-    B.InitStorage()
-    easyButtonAuraByUnitDB.enabled = v and true or false
+    B.SelectSpec()
+    B.db.enabled = v and true or false
     RebuildGroups()
     RefreshAll()
     if B.RefreshPanel then B.RefreshPanel() end
