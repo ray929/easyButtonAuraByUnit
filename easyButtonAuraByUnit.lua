@@ -454,8 +454,10 @@ end
 
 -- =========================================================
 -- 自动学习：脱战扫描光环 → 匹配动作条技能 → 存入当前专精的 learned 表
---   · 战斗红线：入口先查 InCombatLockdown()，战斗中绝不扫描（受限场景光环数据是 secret，
---     脱战后才是明文）；扫到的 spellID 再过一道 issecretvalue 双保险。
+--   · 战斗红线：入口先查 InCombatLockdown()，战斗中绝不扫描；再查插件限制状态
+--     （IsAuraRestricted：combat/encounter/challenge mode/PvP match 任一生效即跳过）。
+--     脱战也不等于可读——大秘境整场期间光环都是 secret（见 IsAuraRestricted 注释）。
+--     扫到的 spellID / 字段再过一道 issecretvalue 双保险（个别法术可被标记 always-secret）。
 --   · 扫描源：自身增益 + 自身减益（自伤类）+ 敌对目标身上的我方减益
 --     （目标 debuff 多在战斗中挂上，脱战后残留时间窗正好可扫——用户确认纳入）。
 --   · 学习条件：有时限（expirationTime>0，滤形态/常驻）+ 我自己施放的（sourceUnit=player）
@@ -464,6 +466,29 @@ end
 --   · 扫描时机：登录+5s、脱战+1s、脱战期间光环变化（UNIT_AURA 防抖 2s——覆盖补 buff）。
 -- =========================================================
 local LEARN_MAX = 64
+
+-- 当前是否处于任一「会让光环数据变 secret」的插件限制状态（脱战也可能生效！）。
+-- 依据 wiki Secret_Values（核实 2026-10-09）：SecretWhenUnitAuraRestricted 谓词 =
+-- combat / encounter / challenge mode / PvP match 限制任一生效。
+--   · Combat = 玩家正在影响战斗（≈ InCombatLockdown）
+--   · Encounter = 正在参与副本 BOSS 战
+--   · ChallengeMode = 「进行中且未完成」的大秘境/挑战模式 —— 整场秘境期间都生效，
+--     包括拉怪间隙的脱战窗口！大秘境里本插件的自动学习扫描全程无效（软门禁拦下，不报错）。
+--   · PvPMatch = 进行中且未完成的 PvP 比赛
+-- 另有 Map 类型（副本地图）但不在光环谓词里——团本/普通副本脱战间隙光环是明文，可扫描。
+-- 探测 API：C_RestrictedActions.IsAddOnRestrictionActive（12.0.0+，缺省退回战斗判定）。
+local function IsAuraRestricted()
+    if C_RestrictedActions and C_RestrictedActions.IsAddOnRestrictionActive then
+        local E = Enum and Enum.AddOnRestrictionType
+        local types = E and { E.Combat, E.Encounter, E.ChallengeMode, E.PvPMatch } or { 0, 1, 2, 3 }
+        for _, t in ipairs(types) do
+            local ok, active = pcall(C_RestrictedActions.IsAddOnRestrictionActive, t)
+            if ok and active then return true end
+        end
+        return false
+    end
+    return InCombatLockdown()
+end
 
 -- 学习源：needHostileTarget = 只在当前存在敌对目标时扫（target 通道）
 local LEARN_SOURCES = {
@@ -499,6 +524,7 @@ end
 local function ScanLearnableAuras()
     if not B.IsEnabled() or not B.IsLearnEnabled() then return end
     if InCombatLockdown() then return end          -- 战斗红线：绝不扫描
+    if IsAuraRestricted() then return end          -- 脱战但限制仍生效（大秘境全程/BOSS战/PvP）：光环是 secret，扫了也白扫
     if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then return end
 
     local learned = B.GetLearnedList()
@@ -519,14 +545,18 @@ local function ScanLearnableAuras()
                 index = index + 1
                 if not ok or not data then break end
 
+                -- 字段级 secret 防护：即使整体门禁漏了（个别法术可被标记 always-secret，
+                -- 见 Secret_Values 谓词注），也不对 secret 值做比较
                 local spellID = data.spellId
+                local exp = data.expirationTime
+                local src = data.sourceUnit
                 if spellID and not IsSecret(spellID)
-                    and data.sourceUnit == "player"                     -- 只学自己施放的
-                    and data.expirationTime and data.expirationTime > 0 -- 只学有时限的（过滤形态/常驻）
+                    and exp and not IsSecret(exp) and exp > 0                 -- 只学有时限的（过滤形态/常驻）
+                    and src == "player" and not IsSecret(src)                 -- 只学自己施放的
                     and not LearnAlreadyCovered(spellID, seen) then
                     -- 匹配动作条技能：优先同 ID，退而求其次按名字找（命中不同 ID 的按钮也算）
                     local actionSpellID = buttonMap[spellID]
-                    if not actionSpellID and data.name then
+                    if not actionSpellID and data.name and not IsSecret(data.name) then
                         local btn = FindActionButtonForSpellName(data.name)
                         if btn and btn.action ~= nil then
                             local _, aid = pcall(GetActionInfo, btn.action)
