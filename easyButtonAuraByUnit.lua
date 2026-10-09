@@ -35,11 +35,11 @@ local LOCALES = {
         ENABLE            = "Global Enable",
         SECTION_MANUAL    = "Manual Bindings",
         SECTION_LEARNED   = "Auto-Learned (out-of-combat scan)",
-        LEARN_ENABLE      = "Auto-learn",
+        LEARN_ENABLE      = "Enable",
         LEARN_CLEAR       = "Clear",
         LEARNED_TARGET_TAG = " (target)",
         LEARN_SUPERSEDED  = " (taken over by manual binding)",
-        LEARN_TIP         = "While out of combat, scans your own timed buffs and debuffs (and your debuffs on a hostile target) and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
+        LEARN_TIP         = "While out of combat, scans your own timed buffs (and your debuffs on a hostile target) and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
         COL_AURA          = "Aura",
         COL_SPELL_BIND    = "Bind Spell",
         COL_SPELL         = "Spell",
@@ -58,11 +58,11 @@ local LOCALES = {
         ENABLE            = "全局启用",
         SECTION_MANUAL    = "手动配置",
         SECTION_LEARNED   = "自动学习（脱战扫描）",
-        LEARN_ENABLE      = "自动学习",
+        LEARN_ENABLE      = "启用",
         LEARN_CLEAR       = "清空",
         LEARNED_TARGET_TAG = "（目标）",
         LEARN_SUPERSEDED  = "（已被手动绑定接管）",
-        LEARN_TIP         = "脱战时扫描自身增益/减益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；可随时清空或整体关闭。",
+        LEARN_TIP         = "脱战时扫描自身增益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；可随时清空或整体关闭。",
         COL_AURA          = "光环",
         COL_SPELL_BIND    = "绑定技能",
         COL_SPELL         = "技能",
@@ -81,11 +81,11 @@ local LOCALES = {
         ENABLE            = "全域啟用",
         SECTION_MANUAL    = "手動配置",
         SECTION_LEARNED   = "自動學習（脫戰掃描）",
-        LEARN_ENABLE      = "自動學習",
+        LEARN_ENABLE      = "啟用",
         LEARN_CLEAR       = "清空",
         LEARNED_TARGET_TAG = "（目標）",
         LEARN_SUPERSEDED  = "（已被手動綁定接管）",
-        LEARN_TIP         = "脫戰時掃描自身增益／減益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；可隨時清空或整體關閉。",
+        LEARN_TIP         = "脫戰時掃描自身增益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；可隨時清空或整體關閉。",
         COL_AURA          = "光環",
         COL_SPELL_BIND    = "綁定技能",
         COL_SPELL         = "技能",
@@ -196,7 +196,7 @@ end
 -- specs[specID].learned = { { auraID=..., actionSpellID=..., unit=..., disabled=bool }... }
 --   自动学习表：脱战扫描当前形态下的光环 → 匹配动作条同名技能 自动生成的绑定（专精级——
 --   扫描的就是当前专精的 buff/debuff，各专精各学各的，共享 buff 玩到该专精时自然补学）。
---   unit = "player"（自身增益/自伤减益）或 "target"（敌对目标身上我方减益），缺省 player。
+--   unit = "player"（自身增益）或 "target"（敌对目标身上我方减益），缺省 player。
 --   每条自带 disabled 标记，可单独停用。旧版角色级根表在 InitStorage 迁入当前专精。
 -- specID 取自 GetSpecializationInfo(GetSpecialization())，拿不到时用 0（通用槽）。
 -- =========================================================
@@ -374,25 +374,61 @@ function B.GetCurrentSpecName()
 end
 
 -- =========================================================
+-- 动作条按钮前缀全集：暴雪 ActionButtonUtil.ActionBarButtonNames 可能不覆盖全部栏位
+-- （11.0 起的 MultiBar5/6/7 等新栏），扫描期漏栏的直接后果是「技能明明在条上却学不到」
+-- （复原放动作条5踩过：ID/名字双双落空，挪到动作条3就能学会）。这里取并集：暴雪列表在前
+-- （官方语义优先），已知栏位兜底；_G 中不存在的名字查不到按钮，无害。学习扫描与渲染定位
+-- 两处消费方必须共用同一份列表，否则扫描期和显示期会对不上。
+local KNOWN_BAR_PREFIXES = {
+    "ActionButton",
+    "MultiBarBottomLeftButton",
+    "MultiBarBottomRightButton",
+    "MultiBarRightButton",
+    "MultiBarLeftButton",
+    "MultiBar5Button",
+    "MultiBar6Button",
+    "MultiBar7Button",
+    "MultiBar8Button",
+}
+
+local function GetBarPrefixList()
+    local list, seen = {}, {}
+    local blizz = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) or {}
+    for _, p in ipairs(blizz) do
+        if type(p) == "string" and not seen[p] then
+            seen[p] = true
+            list[#list + 1] = p
+        end
+    end
+    for _, p in ipairs(KNOWN_BAR_PREFIXES) do
+        if not seen[p] then
+            seen[p] = true
+            list[#list + 1] = p
+        end
+    end
+    return list
+end
+
 -- 原生动作条按钮解析（照搬上游 Preset.lua：按法术名找按钮，缓存 + 自愈验证）
 -- =========================================================
 local function FindActionButtonForSpellName(name)
     if not name then return end
-    local barNames = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) or {}
-    for _, actionBar in ipairs(barNames) do
-        if type(actionBar) == "string" then
-            for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
-                local btn = _G[actionBar .. i]
-                -- 只匹配【可见】的按钮：左右动作条共享 action 槽位，同一技能会同时命中两个按钮，
-                -- 不跳过隐藏按钮会错误匹配到隐藏栏（"拖到右栏却显示在左栏/不显示"）。
-                if btn and btn:IsShown() then
-                    local _, actionSpellID = GetActionInfo(btn.action)
-                    if actionSpellID then
-                        -- 直接 GetSpellName，不要 GetBaseSpell 重定向（上游 AutoCDM 踩过名字错位坑）
-                        local actionSpellName = C_Spell.GetSpellName(actionSpellID)
-                        if name == actionSpellName then
-                            return btn
-                        end
+    for _, actionBar in ipairs(GetBarPrefixList()) do
+        for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
+            local btn = _G[actionBar .. i]
+            -- 只匹配【可见】的按钮：左右动作条共享 action 槽位，同一技能会同时命中两个按钮，
+            -- 不跳过隐藏按钮会错误匹配到隐藏栏（"拖到右栏却显示在左栏/不显示"）。
+            if btn and btn:IsShown() then
+                local atype, actionSpellID = GetActionInfo(btn.action)
+                if atype == "macro" and GetMacroSpell and type(actionSpellID) == "number" then
+                    -- 宏按钮：GetActionInfo 第二返回值是宏槽位号，解析宏实际施放的法术
+                    actionSpellID = GetMacroSpell(actionSpellID)
+                end
+                if actionSpellID then
+                    -- 直接 GetSpellName，不要 GetBaseSpell 重定向（上游 AutoCDM 踩过名字错位坑）
+                    local actionSpellName = C_Spell.GetSpellName(actionSpellID)
+                    if name == actionSpellName then
+                        return btn
                     end
                 end
             end
@@ -408,6 +444,24 @@ local function FindActionButtonForSpellName(name)
                     return stanceBtn
                 end
             end
+        end
+    end
+end
+
+-- 从按钮取「实际施放的法术 ID」：直接法术返回 GetActionInfo 的 ID，宏按钮解析 GetMacroSpell。
+-- 技能 ID 与光环 ID 是两套常见不同的值（复原：技能 1231411 / 光环 1231418）——学习条目
+-- 两者分开存：auraID 用于光环匹配，actionSpellID 用于按钮定位与 IsPlayerSpell 门禁。
+local function ResolveActionSpellID(btn)
+    if not (btn and btn.action ~= nil) then return end
+    local ok, atype, id = pcall(GetActionInfo, btn.action)
+    if not ok then return end
+    if atype == "spell" and type(id) == "number" and id > 0 and not IsSecret(id) then
+        return id
+    end
+    if atype == "macro" and GetMacroSpell and type(id) == "number" then
+        local okM, mSpell = pcall(GetMacroSpell, id)
+        if okM and type(mSpell) == "number" and mSpell > 0 and not IsSecret(mSpell) then
+            return mSpell
         end
     end
 end
@@ -440,7 +494,7 @@ end
 -- 供配置窗口检查「绑定目标技能是否在动作条上」
 function B.BuildSpellButtonMap()
     local map = {}
-    local barNames = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) or {}
+    local barNames = GetBarPrefixList()
     local maxBtns = NUM_ACTIONBAR_BUTTONS or 12
     for _, prefix in ipairs(barNames) do
         if type(prefix) == "string" then
@@ -465,14 +519,53 @@ function B.BuildSpellButtonMap()
     return map
 end
 
+-- 诊断（/babu scan 专用）：全栏位逐按钮查找与光环名字或光环 ID 对应的按钮，
+-- 不要求按钮可见、不要求 atype，把找到的第一处原样报告——用于定位「技能在条上
+-- 却学不到」卡在哪一环（栏位缺失/按钮隐藏/宏没解析出法术/atype 异常）。
+function B.ProbeActionBarForName(name, auraSpellID)
+    for _, prefix in ipairs(GetBarPrefixList()) do
+        for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
+            local btn = _G[prefix .. i]
+            if btn and btn.action then
+                local ok, atype, id = pcall(GetActionInfo, btn.action)
+                if ok then
+                    local spellID = id
+                    if atype == "macro" and GetMacroSpell and type(id) == "number" then
+                        local okM, m = pcall(GetMacroSpell, id)
+                        spellID = (okM and type(m) == "number") and m or nil
+                    end
+                    local spellName = (spellID and C_Spell.GetSpellName(spellID)) or nil
+                    if (spellName and spellName == name)
+                        or (auraSpellID and (id == auraSpellID or spellID == auraSpellID)) then
+                        local shown = true
+                        if btn.IsShown then
+                            local okS, s = pcall(btn.IsShown, btn)
+                            shown = okS and s and true or false
+                        end
+                        return {
+                            button = prefix .. i,
+                            shown = shown,
+                            atype = atype,
+                            id = id,
+                            spellID = spellID,
+                            spellName = spellName,
+                        }
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- =========================================================
 -- 自动学习：脱战扫描光环 → 匹配动作条技能 → 存入当前专精的 learned 表
 --   · 战斗红线：入口先查 InCombatLockdown()，战斗中绝不扫描；再查插件限制状态
 --     （IsAuraRestricted：combat/encounter/challenge mode/PvP match 任一生效即跳过）。
 --     脱战也不等于可读——大秘境整场期间光环都是 secret（见 IsAuraRestricted 注释）。
 --     扫到的 spellID / 字段再过一道 issecretvalue 双保险（个别法术可被标记 always-secret）。
---   · 扫描源：自身增益 + 自身减益（自伤类）+ 敌对目标身上的我方减益
+--   · 扫描源：自身增益 + 敌对目标身上的我方减益
 --     （目标 debuff 多在战斗中挂上，脱战后残留时间窗正好可扫——用户确认纳入）。
+--     自身减益不扫（2026-10-09 用户确认）：自伤类 debuff 没有同 ID 技能按钮。
 --   · 学习条件：有时限（expirationTime>0，滤形态/常驻）+ 我自己施放的（sourceUnit=player）
 --     + 动作条上存在同名/同ID技能 + 与手动/预设/已学去重（同一光环 ID 只活在一张表里，
 --     手动 > 预设 > 学习，所以三者不会冲突重复显示）。上限 64 条 / 专精。
@@ -503,10 +596,11 @@ local function IsAuraRestricted()
     return InCombatLockdown()
 end
 
--- 学习源：needHostileTarget = 只在当前存在敌对目标时扫（target 通道）
+-- 学习源：needHostileTarget = 只在当前存在敌对目标时扫（target 通道）。
+-- 不扫 player-HARMFUL（2026-10-09 用户确认）：自伤类 debuff（筋疲力尽/自律这类）
+-- 在动作条上没有同 ID 技能，学进去只是死条目——只扫自身增益 + 敌对目标身上的我方减益。
 local LEARN_SOURCES = {
     { unit = "player", filter = "HELPFUL" },
-    { unit = "player", filter = "HARMFUL" },
     { unit = "target", filter = "HARMFUL", needHostileTarget = true },
 }
 
@@ -653,19 +747,26 @@ local function ScanLearnableAuras(verbose)
                         actionSpellID = spellID
                         matchPath = "id"
                     elseif data.name and not IsSecret(data.name) then
-                        local btn = FindActionButtonForSpellName(data.name)
-                        if btn and btn.action ~= nil then
-                            local okA, atype, aid = pcall(GetActionInfo, btn.action)
-                            if okA and atype == "spell" and type(aid) == "number"
-                                and aid > 0 and not IsSecret(aid) then
-                                actionSpellID = aid
-                                matchPath = "name"
-                            end
+                        local aid = ResolveActionSpellID(FindActionButtonForSpellName(data.name))
+                        if aid then
+                            actionSpellID = aid
+                            matchPath = "name"
                         end
                     end
                     if not actionSpellID then
                         log("%s (%d): no matching action bar spell (buttonMap/name both miss), skipped",
                             data.name, spellID)
+                        -- 深度探测（仅 /babu scan 报告模式）：全栏位逐按钮找同名/同ID，
+                        -- 找到即报告按钮名与按钮状态，下一步排查才有抓手
+                        if report and data.name then
+                            local probe = B.ProbeActionBarForName(data.name, spellID)
+                            if probe then
+                                log("probe: %s found on %s (shown=%s, type=%s, id=%s, spell=%s/%s)",
+                                    data.name, probe.button, tostring(probe.shown),
+                                    tostring(probe.atype), tostring(probe.id),
+                                    tostring(probe.spellID), tostring(probe.spellName))
+                            end
+                        end
                     elseif type(actionSpellID) ~= "number" or not IsPlayerSpell(actionSpellID) then
                         log("%s (%d): button spell %s is not a player spell, skipped",
                             data.name, spellID, tostring(actionSpellID))
