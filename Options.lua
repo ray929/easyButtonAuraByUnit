@@ -397,6 +397,11 @@ local function LayoutScrollContent(count)
 
     local learned = B.GetLearnedList()
     local nLearned = B.IsLearnEnabled() and #learned or 0
+    -- 学习条目行：定位在标题行与内置预设区之间（此前漏写 SetPoint，行无锚定默认落在
+    -- 滚动区中心互相重叠 → 配置界面里「学到了但看不见」）
+    for i, lr in ipairs(learnedRows) do
+        lr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(ly + 26 + (i - 1) * LEARN_ROW_H))
+    end
     local py = ly + 26 + nLearned * LEARN_ROW_H + 4
 
     -- 内置预设区标题 + 行
