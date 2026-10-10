@@ -970,7 +970,7 @@ local function InitAuraGroup(p)
     local filter = p.filter or ((p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER")
 
     local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
-    container:SetFrameStrata("HIGH")
+    container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(1000)
     container:SetSize(36, 36)
     container:SetUnit(p.unit)
@@ -1123,7 +1123,7 @@ end
 local function GetEnchantOverlay(p)
     if p.overlay then return p.overlay end
     local ov = CreateFrame("Frame", nil, UIParent)
-    ov:SetFrameStrata("HIGH")
+    ov:SetFrameStrata("MEDIUM")
     ov:SetFrameLevel(1000)
     ov:SetSize(36, 36)
     ov:Hide()
