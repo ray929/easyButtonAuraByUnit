@@ -150,15 +150,8 @@ local function DockContainer(container, p)
     if p then
         p._docked = true
         p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
-        -- ⚠️ 倒计时框（cd）挂靠时被锚到 UIParent【绝对坐标】（见 LayoutAuraChildren），
-        --    不随容器移动 → 停靠时必须一并移出屏幕，否则数字会滞留在旧按钮位置上
-        --    （表现为「切换技能栏后倒计时数字残留」）。
-        if p.cd then
-            pcall(function()
-                p.cd:ClearAllPoints()
-                p.cd:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", DOCK_X, DOCK_Y)
-            end)
-        end
+        -- 倒计时框（cd）锚在【容器 TOPLEFT】上（见 LayoutAuraChildren），容器停靠屏幕外时
+        -- cd 自动跟随，故无需在此显式移动（且战斗中受限帧的布局操作会被静默拦下，不可靠）。
     end
 end
 
@@ -920,27 +913,36 @@ end
 -- =========================================================
 -- 类型 A：unit aura —— 12.1 AuraContainer 暴雪渲染层（照搬上游，数据源换成手动绑定）
 -- =========================================================
--- 重设 AuraButton 内倒计时框锚点（固定几何：左下时间、左上层数，用户确认）。
--- ⚠️ 传坐标时用【绝对屏幕坐标】锚到 UIParent——AuraContainer 的 flow layout 会在光环变化/
---    切目标时异步把容器尺寸覆盖成空布局值(≈1x1)，若 cd 相对 btn/容器锚定会跟着错位。
-local function LayoutAuraChildren(p, left, bottom, width, height, r)
+-- 重设 AuraButton 内倒计时框锚点（固定几何：左下时间，用户确认）。
+-- ⚠️ cd 锚到【容器 TOPLEFT 的固定像素偏移】+【显式 SetSize】，而非 UIParent 绝对坐标：
+--    · 容器 TOPLEFT 由 PositionContainer 设置后【稳定不变】（暴雪 flow layout 只异步改尺寸、不改位置）
+--      → 即便容器尺寸被覆盖成空布局值(≈1x1)也不会错位（cd 尺寸与容器尺寸解耦）；
+--    · cd 从此成为容器的【子级锚定关系】，容器停靠屏幕外时 cd 自动跟随 → 战斗中无需重新锚定
+--      （受限帧的布局操作在战斗中会被静默拦下，靠绝对坐标重锚不可行，故「战斗中数字残留」）。
+local function LayoutAuraChildren(p, width, height)
     local cd = p.cd
     if not cd then return end
-    if left then
-        r = r or 1
-        local rx, ry = left * r, bottom * r
-        local rw, rh = width * r, height * r
-        cd:ClearAllPoints()
-        cd:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", rx + 1, ry - 6)
-        cd:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", rx + rw * 0.62, ry + rh * 0.62 - 7)
-    else
-        local btn = p.auraButton
-        if not btn then return end
-        local w, h = btn:GetSize()
-        if not w or w <= 0 then w, h = AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE end
-        cd:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 1, -6)
-        cd:SetPoint("TOPRIGHT", btn, "BOTTOMLEFT", w * 0.62, h * 0.62 - 7)
+    local parent = p.container or p.auraButton
+    if not parent then return end
+    -- r = 按钮缩放 / UIParent 缩放：把按钮物理尺寸换算到容器（= UIParent 缩放体系）局部坐标
+    local r = 1
+    if p.auraButton then
+        local bs, ps = p.auraButton:GetEffectiveScale(), UIParent:GetEffectiveScale()
+        if bs and ps and ps > 0 then r = bs / ps end
     end
+    local w, h
+    if width and width > 0 and height and height > 0 then
+        w, h = width, height
+    else
+        -- initializeFrame 阶段（尚未定位）：退回当前容器尺寸（已是局部坐标，无需再换算）
+        r = 1
+        w, h = parent:GetSize()
+        if not w or w <= 0 then w, h = AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE end
+    end
+    local rw, rh = w * r, h * r
+    cd:ClearAllPoints()
+    cd:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", 1, -(rh + 6))
+    cd:SetSize(rw * 0.62 - 1, rh * 0.62 - 1)
 end
 
 -- 把容器定位到动作按钮之上（屏幕坐标，绝不锚到按钮；含缩放换算）。
@@ -960,7 +962,7 @@ local function PositionContainer(container, btn, p)
         p._docked = nil
     end
     container:SetSize(width * r, height * r)
-    LayoutAuraChildren(p, left, bottom, width, height, r)
+    LayoutAuraChildren(p, width, height)
     return true
 end
 
