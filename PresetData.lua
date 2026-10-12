@@ -192,4 +192,13 @@ B.PRESET_DATA = {
     { class = "EVOKER", auraSpellID = 357210, actionSpellID = 357210 },  -- 深呼吸（爆发）
     -- 种族技能（与职业无关，不设 class；IsPlayerSpell 自动过滤——只有会该技能的种族才生效）
     { auraSpellID = 65116, actionSpellID = 20594 },                      -- 石像形态（光环 65116 → 技能 20594，矮人）
+
+    -- 先祖迅捷 443454：先知（Farseer）英雄天赋第 5 行节点，习得后【取代】自然迅捷 378081
+    --（玩家身上的无持续时间光环与条上按钮都变成 443454）。⚠️ 必须单列条目、不能并进上面
+    -- 自然迅捷那条的 auraSpellID 数组：按钮解析按法术名匹配（ResolveButton→FindActionButtonForSpellName），
+    -- 「先祖迅捷」与「自然迅捷」名字不同，actionSpellID 只有 378081 时永远找不到按钮。
+    -- 未习得该天赋时 IsPlayerSpell(443454)=false → 条目自动失活，无副作用。
+    -- ⚠️ 放在表尾：预设启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会使
+    -- 后续条目的禁用记录错位。
+    { class = "SHAMAN", auraSpellID = 443454, actionSpellID = 443454, overlayOnly = true }, -- 先祖迅捷（无持续时间，先知天赋取代自然迅捷）
 }
