@@ -10,6 +10,7 @@
 - Duration-less auras (forms / instant toggles, e.g. Nature's Swiftness, Ghost Wolf) show a translucent green mask instead of a countdown.
 - Bindings are saved per specialization; a character-level master switch toggles everything.
 - Multiple auras bound to the same button share one display; any match shows.
+- Some spells (e.g. Barbed Shot) produce both a buff on you and a debuff on your target at the same time, so they show up as two separate entries on the same button — this is expected. Uncheck the entry you don't want to track in the configuration window.
 - Weapon enchants (Flametongue, Windfury, Rites, etc.) are built in and need no setup.
 - Soft edge glow and countdown color distinguish self-buffs (green) from enemy debuffs (red).
 - Configuration window opens with `/babu`; shared minimap button for all Easy add-ons.
@@ -24,6 +25,7 @@
 - 无持续时间的光环（形态/瞬发开关，如自然迅捷、幽魂之狼）不显示倒计时，仅以绿色半透明遮罩标记。
 - 绑定按专精分别保存；全局开关为角色级，一键控制全部显示。
 - 多条光环绑定同一按钮时自动合并显示，任一命中即显示。
+- 某些技能（如倒刺射击）会同时产生「自身增益」与「敌对目标减益」两个条目，同一技能出现两个条目属正常现象；不需要监控的条目可在配置窗口中取消勾选。
 - 武器附魔（火舌/风怒/裁决仪式等）内置预设，无需配置。
 - 柔光标记与倒计时配色区分：自身增益为绿色，敌对减益为纯红。
 - 输入 `/babu` 打开配置窗口；Easy 系列插件共享一个小地图按钮。
@@ -38,6 +40,7 @@
 - 無持續時間的光環（形態／瞬發開關，如自然迅捷、幽魂之狼）不顯示倒計時，僅以綠色半透明遮罩標記。
 - 綁定按專精分別保存；全域開關為角色級，一鍵控制全部顯示。
 - 多條光環綁定同一按鈕時自動合併顯示，任一命中即顯示。
+- 某些技能（如倒刺射擊）會同時產生「自身增益」與「敵對目標減益」兩個條目，同一技能出現兩個條目屬正常現象；不需要監控的條目可在設定視窗中取消勾選。
 - 武器附魔（火舌／風怒／裁決儀式等）內建預設，無需設定。
 - 柔光標記與倒計時配色區分：自身增益為綠色，敵對減益為純紅。
 - 輸入 `/babu` 開啟設定視窗；Easy 系列插件共用一個小地圖按鈕。
