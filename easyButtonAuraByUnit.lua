@@ -1593,7 +1593,7 @@ function B.DumpGroupsVerbose()
         out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s auras=[%s] container=%s btn=%s initFailed=%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
             table.concat(auras, ","),
-            p.container and (p.container:IsShown() and "shown" or "hidden") or "nil",
+            p.container and (p._docked and "docked" or "shown") or "nil",
             p.button and p.button:GetName() or "nil",
             tostring(p._initFailed))
     end
