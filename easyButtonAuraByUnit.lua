@@ -919,30 +919,27 @@ end
 --      → 即便容器尺寸被覆盖成空布局值(≈1x1)也不会错位（cd 尺寸与容器尺寸解耦）；
 --    · cd 从此成为容器的【子级锚定关系】，容器停靠屏幕外时 cd 自动跟随 → 战斗中无需重新锚定
 --      （受限帧的布局操作在战斗中会被静默拦下，靠绝对坐标重锚不可行，故「战斗中数字残留」）。
-local function LayoutAuraChildren(p, width, height)
+local function LayoutAuraChildren(p, width, height, r)
     local cd = p.cd
     if not cd then return end
     local parent = p.container or p.auraButton
     if not parent then return end
-    -- r = 按钮缩放 / UIParent 缩放：把按钮物理尺寸换算到容器（= UIParent 缩放体系）局部坐标
-    local r = 1
-    if p.auraButton then
-        local bs, ps = p.auraButton:GetEffectiveScale(), UIParent:GetEffectiveScale()
-        if bs and ps and ps > 0 then r = bs / ps end
-    end
     local w, h
     if width and width > 0 and height and height > 0 then
-        w, h = width, height
+        -- width/height 是【动作条按钮】rect（按钮缩放单位），乘 r（按钮缩放/UIParent 缩放）
+        -- 换算到容器局部坐标（容器挂在 UIParent 上，局部单位 = UIParent 单位）。
+        -- ⚠️ r 必须取【动作条按钮】的缩放，不能取 p.auraButton（那是容器内的暴雪 AuraButton，
+        --    缩放 = UIParent 缩放 → r=1，会让 cd 位置/尺寸算错、与附魔数字不在同一基线）。
+        r = r or 1
+        w, h = width * r, height * r
     else
         -- initializeFrame 阶段（尚未定位）：退回当前容器尺寸（已是局部坐标，无需再换算）
-        r = 1
         w, h = parent:GetSize()
         if not w or w <= 0 then w, h = AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE end
     end
-    local rw, rh = w * r, h * r
     cd:ClearAllPoints()
-    cd:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", 1, -(rh + 6))
-    cd:SetSize(rw * 0.62 - 1, rh * 0.62 - 1)
+    cd:SetPoint("BOTTOMLEFT", parent, "TOPLEFT", 1, -(h + 6))
+    cd:SetSize(w * 0.62 - 1, h * 0.62 - 1)
 end
 
 -- 把容器定位到动作按钮之上（屏幕坐标，绝不锚到按钮；含缩放换算）。
@@ -962,7 +959,7 @@ local function PositionContainer(container, btn, p)
         p._docked = nil
     end
     container:SetSize(width * r, height * r)
-    LayoutAuraChildren(p, width, height)
+    LayoutAuraChildren(p, width, height, r)
     return true
 end
 
