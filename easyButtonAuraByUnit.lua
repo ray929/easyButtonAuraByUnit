@@ -856,13 +856,18 @@ function B.RunLearnScanVerbose()
     return report or {}
 end
 
--- 自动学习防抖：脱战期间光环变化（补 buff、目标减益残留）都是学习窗口；
--- 战斗中本事件高频触发也无妨——timer 到点后 ScanLearnableAuras 的战斗门禁直接返回。
-local learnScanTimer
+-- 自动学习排期：脱战那一刻排定的扫描是【最优先】的，只允许"更早"的请求覆盖它。
+-- 早先实现是无条件 Cancel + 重新计时，导致脱战窗口内自身 buff 刷新 / 目标 debuff 变动
+-- 不断触发 UNIT_AURA（防抖 2s），把脱战扫描一路顺延，光环掉光后才轮到扫描 → 0 条。
+-- 现在：已有更早（或同等）的待执行扫描时不重置；仅当请求的时间点更早才重排。
+local learnScanTimer, learnScanDelay
 local function ScheduleLearnScan(delay)
+    delay = delay or 2
+    if learnScanTimer and learnScanDelay and learnScanDelay <= delay then return end
     if learnScanTimer then learnScanTimer:Cancel() end
-    learnScanTimer = C_Timer.NewTimer(delay or 2, function()
-        learnScanTimer = nil
+    learnScanDelay = delay
+    learnScanTimer = C_Timer.NewTimer(delay, function()
+        learnScanTimer, learnScanDelay = nil, nil
         pcall(ScanLearnableAuras)
     end)
 end
@@ -1405,8 +1410,9 @@ evFrame:SetScript("OnEvent", function(_, event)
             auraRefreshTimer = nil
             RefreshAll()
         end)
-        -- 自动学习：脱战期间光环变化 = 学习窗口（补 buff、目标减益残留）；
-        -- 防抖 2s；战斗中触发时 timer 到点后被 ScanLearnableAuras 的战斗门禁拦下
+        -- 自动学习：脱战期间光环变化 = 学习窗口（补 buff、目标减益残留）；排 2s 防抖，
+        -- 但只有【没有更早的待执行扫描】时才生效——绝不会后延脱战那一刻排定的扫描。
+        -- 战斗中触发也无妨：timer 到点后被 ScanLearnableAuras 的战斗门禁直接拦下。
         ScheduleLearnScan(2)
     elseif event == "PLAYER_TARGET_CHANGED" then
         -- AuraContainer 不监听目标切换，unit="target" 的容器需显式触发重新解析光环
@@ -1430,8 +1436,9 @@ evFrame:SetScript("OnEvent", function(_, event)
         end
         RefreshAll()
         if B.OnCombatChanged then B.OnCombatChanged(false) end
-        -- 脱战窗口正是自动学习的扫描窗（战斗中数据是 secret，绝不扫）；稍等动作条/光环稳定
-        ScheduleLearnScan(1)
+        -- 脱战窗口正是自动学习的扫描窗（战斗中数据是 secret，绝不扫）；脱战后立即排一次扫描
+        -- （delay 0 = 下一帧）；后续 UNIT_AURA 的 2s 防抖不会再把它往后推（见 ScheduleLearnScan）。
+        ScheduleLearnScan(0)
     elseif event == "PLAYER_REGEN_DISABLED" then
         if B.OnCombatChanged then B.OnCombatChanged(true) end
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then
