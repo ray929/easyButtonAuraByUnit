@@ -150,6 +150,15 @@ local function DockContainer(container, p)
     if p then
         p._docked = true
         p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
+        -- ⚠️ 倒计时框（cd）挂靠时被锚到 UIParent【绝对坐标】（见 LayoutAuraChildren），
+        --    不随容器移动 → 停靠时必须一并移出屏幕，否则数字会滞留在旧按钮位置上
+        --    （表现为「切换技能栏后倒计时数字残留」）。
+        if p.cd then
+            pcall(function()
+                p.cd:ClearAllPoints()
+                p.cd:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", DOCK_X, DOCK_Y)
+            end)
+        end
     end
 end
 
@@ -1259,7 +1268,13 @@ local function UpdateEnchant(p)
         return
     end
     local btn = ResolveButton(p, p.actionSpellID)
-    if not btn then return end
+    if not btn then
+        -- 该技能已不在动作条上（翻页 / 换栏 / 换技能）→ 撤下覆盖层。
+        -- overlay 是自建帧、没有暴雪驱动，不显式隐藏则数字与柔光会滞留在旧按钮位置上。
+        if p.overlay then p.overlay:Hide() end
+        p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
+        return
+    end
     local ov = GetEnchantOverlay(p)
     if not PositionOverlay(ov, btn, p) then
         ov:Hide()
