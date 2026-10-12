@@ -38,7 +38,6 @@ local LOCALES = {
         SECTION_LEARNED   = "Auto-Learned (out-of-combat scan)",
         LEARN_ENABLE      = "Enable",
         LEARN_CLEAR       = "Clear",
-        LEARNED_TARGET_TAG = " (target)",
         LEARN_SUPERSEDED  = " (taken over by manual binding)",
         LEARN_TIP         = "While out of combat, scans your own timed buffs (and your debuffs on a hostile target) and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
         COL_AURA          = "Aura",
@@ -62,7 +61,6 @@ local LOCALES = {
         SECTION_LEARNED   = "自动学习（脱战扫描）",
         LEARN_ENABLE      = "启用",
         LEARN_CLEAR       = "清空",
-        LEARNED_TARGET_TAG = "（目标）",
         LEARN_SUPERSEDED  = "（已被手动绑定接管）",
         LEARN_TIP         = "脱战时扫描自身增益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；开关与条目均按专精保存，可随时清空或关闭。",
         COL_AURA          = "光环",
@@ -86,7 +84,6 @@ local LOCALES = {
         SECTION_LEARNED   = "自動學習（脫戰掃描）",
         LEARN_ENABLE      = "啟用",
         LEARN_CLEAR       = "清空",
-        LEARNED_TARGET_TAG = "（目標）",
         LEARN_SUPERSEDED  = "（已被手動綁定接管）",
         LEARN_TIP         = "脫戰時掃描自身增益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；開關與條目均按專精保存，可隨時清空或關閉。",
         COL_AURA          = "光環",
@@ -639,6 +636,11 @@ local function IsAuraRestricted()
     end
     return InCombatLockdown()
 end
+
+-- 学习条目单位标注：固定英文、不本地化（用户 2026-10-12 指定）。
+-- 自身通道 = player + HELPFUL（增益）；目标通道 = target + HARMFUL（敌对目标身上的我方减益）。
+B.LEARNED_TAG_SELF   = " (player buff)"
+B.LEARNED_TAG_TARGET = " (target debuff)"
 
 -- 学习源：needHostileTarget = 只在当前存在敌对目标时扫（target 通道）。
 -- 不扫 player-HARMFUL（2026-10-09 用户确认）：自伤类 debuff（筋疲力尽/自律这类）
