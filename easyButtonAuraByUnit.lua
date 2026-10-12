@@ -127,6 +127,41 @@ B.Style = {
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
 
 -- =========================================================
+-- AuraContainer 生命周期常量与工具
+-- =========================================================
+-- 容器创建时的初始尺寸（占位；挂靠到按钮后由按钮 rect 覆盖为按钮大小）。
+local AURA_DEFAULT_SIZE = 42
+
+-- 停靠坐标：容器找不到按钮 / 目标不适用时移到屏幕外。
+-- ⚠️ 容器 Show 过之后【永不 Hide】——Hide 会让 ShouldRegisterForDynamicEvents
+--    (= IsVisible and IsEnabled) 停收 UNIT_AURA，且 AuraButton:IsShown() 误判为假；
+--    撤下显示一律靠停靠（移出屏幕），容器始终「可见」（IsVisible 与屏幕坐标无关）。
+local DOCK_X, DOCK_Y = -10000, -10000
+
+-- 每容器一个 AuraSlot 的 key（配置变更时按此 key 就地更新 candidateFilters）。
+local AURA_SLOT_KEY = "byunit"
+
+local function DockContainer(container, p)
+    if not container then return end
+    if p and p._docked then return end
+    container:ClearAllPoints()
+    container:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", DOCK_X, DOCK_Y)
+    container:Show()
+    if p then
+        p._docked = true
+        p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
+    end
+end
+
+-- 光环集合签名（排序后拼接）：配置变更时比对，决定是否需要就地更新 includeSpellIDs。
+local function AuraIDSignature(auraIDs)
+    local ids = {}
+    for id in pairs(auraIDs or {}) do ids[#ids + 1] = id end
+    table.sort(ids)
+    return table.concat(ids, ",")
+end
+
+-- =========================================================
 -- Secret Value 安全工具（12.x 红线）
 -- =========================================================
 local function IsSecret(v)
@@ -508,9 +543,10 @@ local function ResolveButton(p, actionSpellID)
     return p.button
 end
 
--- 失活清理：隐藏容器/覆盖层并清按钮缓存，防残留显示滞留在旧按钮上
+-- 失活清理：撤下容器/覆盖层并清按钮缓存，防残留显示滞留在旧按钮上
+-- ⚠️ AuraContainer 一律【停靠屏幕外】，绝不 Hide（见 DockContainer）。
 local function DeactivateGroup(p)
-    if p.container then p.container:Hide() end
+    if p.container then DockContainer(p.container, p) end
     if p.overlay then p.overlay:Hide() end
     p.button = nil
     p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
@@ -892,7 +928,7 @@ local function LayoutAuraChildren(p, left, bottom, width, height, r)
         local btn = p.auraButton
         if not btn then return end
         local w, h = btn:GetSize()
-        if not w or w <= 0 then w, h = 36, 36 end
+        if not w or w <= 0 then w, h = AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE end
         cd:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 1, -6)
         cd:SetPoint("TOPRIGHT", btn, "BOTTOMLEFT", w * 0.62, h * 0.62 - 7)
     end
@@ -912,6 +948,7 @@ local function PositionContainer(container, btn, p)
         container:ClearAllPoints()
         container:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left * r, (bottom + height) * r)
         p._rectL, p._rectB, p._rectW, p._rectH = left, bottom, width, height
+        p._docked = nil
     end
     container:SetSize(width * r, height * r)
     LayoutAuraChildren(p, left, bottom, width, height, r)
@@ -965,21 +1002,23 @@ local function SetupAuraButton(p, btn)
     LayoutAuraChildren(p)
 end
 
--- 为合并组创建 AuraContainer（每组一个容器，独立定位到各自按钮）。
+-- 为合并组创建 AuraContainer（每组一个容器）。
 -- 光环过滤用 includeSpellIDs（按 auraData.spellId 精确匹配光环 ID）。
 -- 过滤串 p.filter 由 RebuildGroups 决定：
 --   手动绑定 player 路 → HELPFUL|PLAYER（只看自己施放的增益）；
 --   手动绑定 target 路 → HARMFUL|PLAYER（只看自己施放到敌对目标身上的减益，上游烈焰震击同款）；
 --   预设 → 沿用上游语义（缺省 HELPFUL，条目可显式覆盖）。
-local function InitAuraGroup(p)
+-- ⚠️ 生命周期解耦：本函数只负责【创建容器】，创建后【默认停靠屏幕外】；
+--    「定位到按钮」由 UpdateAuraGroup（挂靠）负责。容器一旦 Show 过永不 Hide（见 DockContainer）。
+local function EnsureContainerForGroup(p)
     if p.container then return true end
-    if p._initFailed then return false end  -- 上次战斗中创建失败 → 等脱战重试
+    if p._initFailed then return false end  -- 上次创建失败 → 等脱战重试
     local filter = p.filter or ((p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER")
 
     local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
     container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(1000)
-    container:SetSize(36, 36)
+    container:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
     container:SetUnit(p.unit)
     container:SetEnabled(true)
     -- ⚠️ 先挂引用：AddAuraSlot 的 initializeFrame 回调【同步】执行，
@@ -993,7 +1032,7 @@ local function InitAuraGroup(p)
 
     local auraFrame
     local ok = pcall(function()
-        auraFrame = container:AddAuraSlot("byunit", filter, {
+        auraFrame = container:AddAuraSlot(AURA_SLOT_KEY, filter, {
             candidateFilters = { includeSpellIDs = includeSpellIDs },
             initializeFrame = function(btn) SetupAuraButton(p, btn) end,
         })
@@ -1005,8 +1044,44 @@ local function InitAuraGroup(p)
         return false
     end
     p.auraFrame = auraFrame
-    container:Show()
+    p._idsSig = AuraIDSignature(p.auraIDs)
+    DockContainer(container, p)   -- 默认停靠（内含 Show，保证注册 UNIT_AURA）
     return true
+end
+
+-- 容器生命周期：把「当前组集合」的容器差额补齐。
+-- ⚠️ 容器只能在脱战创建：战斗中调用则挂 _pendingBuild，脱战后补做（无防抖）。
+local function EnsureContainers()
+    if InCombatLockdown() then
+        B._pendingBuild = true
+        return
+    end
+    B._pendingBuild = false
+    for _, p in ipairs(B.groups) do
+        pcall(EnsureContainerForGroup, p)
+    end
+end
+
+-- 配置变更时就地更新容器追踪的光环集合（不重建容器）。
+-- 客户端无 SetAuraSlotCandidateFilters 时退回「停靠旧容器 + 新建」。
+local function SyncGroupFilters(p)
+    if not p.container then return end
+    local sig = AuraIDSignature(p.auraIDs)
+    if p._idsSig == sig then return end
+    local ids = {}
+    for auraID in pairs(p.auraIDs) do ids[auraID] = true end
+    local ok = pcall(function()
+        p.container:SetAuraSlotCandidateFilters(AURA_SLOT_KEY, { includeSpellIDs = ids })
+    end)
+    if ok then
+        p._idsSig = sig
+        return
+    end
+    DockContainer(p.container, p)
+    p.container, p.auraFrame = nil, nil
+    p.cd, p.stacksFS, p.glow, p.auraButton = nil, nil, nil, nil
+    p._idsSig, p._docked, p._initFailed = nil, nil, nil
+    pcall(EnsureContainerForGroup, p)
 end
 
 -- Cooldown 倒计时数字 FontString 要等暴雪首次 SetCooldownFromDurationObject 后才存在，
@@ -1025,9 +1100,14 @@ local function ApplyCountdownFont(p)
     p.cdStyled = true
 end
 
+-- 挂靠（纯定位）：解析按钮 → 把容器定位到按钮；找不到 / 目标不适用 → 停靠屏幕外。
+-- ⚠️ 绝不在此创建容器（创建只在脱战由 EnsureContainers 完成），故战斗中也能安全挂靠。
 local function UpdateAuraGroup(p)
     if not p.actionSpellID or not next(p.auraIDs) then return end
-    -- 目标类绑定只在敌对目标身上生效：友方目标（或无目标）时停用，
+    local container = p.container
+    if not container then return end   -- 容器尚未创建（战斗中搁置）→ 本轮无法挂靠
+
+    -- 目标类绑定只在敌对目标身上生效：友方目标（或无目标）时停靠，
     -- 防止 includeSpellIDs 被暴雪在 HARMFUL 通道忽略后误匹配任意减益。
     if p.unit == "target" then
         local exists, friendly
@@ -1036,12 +1116,10 @@ local function UpdateAuraGroup(p)
         local ok2, f = pcall(UnitIsFriend, "player", "target")
         if ok2 then friendly = f and f ~= false end
         if not exists or friendly then
-            if p.container then p.container:Hide() end
+            DockContainer(container, p)
             return
         end
     end
-    if not InitAuraGroup(p) then return end
-    local container = p.container
 
     -- 解析显示目标按钮（缓存+自愈验证，找不到时 ticker 定期重试；该技能必须放在动作条上）
     local btn = ResolveButton(p, p.actionSpellID)
@@ -1054,12 +1132,12 @@ local function UpdateAuraGroup(p)
         if not IsPlayerSpell(p.actionSpellID) then
             DeactivateGroup(p)
         else
-            container:Hide()
+            DockContainer(container, p)
         end
         return
     end
     if not PositionContainer(container, btn, p) then
-        container:Hide()
+        DockContainer(container, p)
         return
     end
     -- 容器保持可见以接收 UNIT_AURA（ShouldRegisterForDynamicEvents = IsVisible and IsEnabled）；
@@ -1132,7 +1210,7 @@ local function GetEnchantOverlay(p)
     local ov = CreateFrame("Frame", nil, UIParent)
     ov:SetFrameStrata("MEDIUM")
     ov:SetFrameLevel(1000)
-    ov:SetSize(36, 36)
+    ov:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
     ov:Hide()
     local cd = CreateFrame("Cooldown", nil, ov)
     cd:SetHideCountdownNumbers(false)
@@ -1212,32 +1290,51 @@ B.enchants = {}  -- 类型 B：{ enchantID, actionSpellID, overlay, cd, ... }
 
 local function RebuildGroups()
     if InCombatLockdown() then
-        B._pendingRebuild = true   -- 战斗中不建/不拆容器，脱战后重试
+        B._pendingRebuild = true   -- 战斗中不改组集合（容器增删也只在脱战做），脱战后重试
         return
     end
     B._pendingRebuild = false
-    -- 撤下旧的（容器 / 覆盖层），避免重建后残留
-    for _, p in ipairs(B.groups) do
-        if p.container then p.container:Hide() end
-    end
+
+    -- 旧组按 key 建索引：配置变更时【复用同一组对象】（容器 / AuraButton 一并保留），
+    -- 只增删改 includeSpellIDs；容器本身的增删改交给 EnsureContainers / SyncGroupFilters。
+    local oldGroups = B.groups
+    local oldByKey = {}
+    for _, g in ipairs(oldGroups) do oldByKey[g.key] = g end
+
+    -- 附魔覆盖层无 AuraContainer，直接撤下重建（代价低，不参与复用）
     for _, p in ipairs(B.enchants) do
         if p.overlay then p.overlay:Hide() end
     end
-    wipe(B.groups)
     wipe(B.enchants)
-    if not B.IsEnabled() then return end
+
+    if not B.IsEnabled() then
+        for _, g in ipairs(oldGroups) do
+            if g.container then DockContainer(g.container, g) end
+        end
+        B.groups = {}
+        return
+    end
 
     local merged, order = {}, {}
     local function addGroup(unit, filter, actionSpellID, auraID, overlayOnly)
         local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionSpellID)
         local g = merged[key]
         if not g then
-            g = { unit = unit, filter = filter, actionSpellID = actionSpellID, auraIDs = {} }
+            g = oldByKey[key]
+            if g then
+                oldByKey[key] = nil      -- 标记已复用（剩余的都是待停靠的旧组）
+                g.auraIDs = {}           -- 重新归并光环集合（下方比对签名决定是否更新过滤器）
+                g._wantOverlayOnly = nil
+            else
+                g = { unit = unit, filter = filter, actionSpellID = actionSpellID, auraIDs = {} }
+            end
+            g.key = key
+            g.unit, g.filter, g.actionSpellID = unit, filter, actionSpellID
             merged[key] = g
             order[#order + 1] = g
         end
         g.auraIDs[auraID] = true
-        if overlayOnly then g.overlayOnly = true end
+        if overlayOnly then g._wantOverlayOnly = true end
     end
 
     -- 手动绑定：双通道自动展开
@@ -1287,8 +1384,30 @@ local function RebuildGroups()
         end
     end
 
+    -- overlayOnly 语义变化 → AuraButton 注册不同（挂/不挂倒计时框），容器必须重建
     for _, g in ipairs(order) do
-        B.groups[#B.groups + 1] = g
+        local want = g._wantOverlayOnly and true or false
+        if g.container and want ~= (g.overlayOnly and true or false) then
+            DockContainer(g.container, g)
+            g.container, g.auraFrame = nil, nil
+            g.cd, g.stacksFS, g.glow, g.auraButton = nil, nil, nil, nil
+            g._idsSig, g._docked, g._initFailed = nil, nil, nil
+        end
+        g.overlayOnly = want
+        g._wantOverlayOnly = nil
+    end
+
+    -- 未被复用的旧组（已删除的绑定）：停靠其容器（不 Hide）
+    for _, g in pairs(oldByKey) do
+        if g.container then DockContainer(g.container, g) end
+    end
+
+    B.groups = order
+
+    -- 容器生命周期：差额补齐（脱战）；再就地更新被复用组的光环集合
+    EnsureContainers()
+    for _, g in ipairs(B.groups) do
+        SyncGroupFilters(g)
     end
 end
 
@@ -1378,9 +1497,10 @@ end
 
 local evFrame = CreateFrame("Frame")
 local auraRefreshTimer = nil
+evFrame:RegisterEvent("PLAYER_ENTERING_WORLD")      -- 进入世界（登录 / reload / 换区）：建容器
 evFrame:RegisterEvent("PLAYER_LOGIN")
 for ev in pairs(actionbarEvents) do evFrame:RegisterEvent(ev) end
-evFrame:RegisterEvent("PLAYER_REGEN_ENABLED")       -- 脱战：重试战斗中建失败的容器 + 恢复配置窗口
+evFrame:RegisterEvent("PLAYER_REGEN_ENABLED")       -- 脱战：补建战斗中搁置的容器 + 恢复配置窗口
 evFrame:RegisterEvent("PLAYER_REGEN_DISABLED")      -- 进战：隐藏配置窗口
 evFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")   -- 武器附魔（重附/替换/卸下）立即刷新
 evFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")     -- 同上兜底
@@ -1389,7 +1509,12 @@ evFrame:RegisterEvent("PLAYER_TARGET_CHANGED")      -- 切目标：target 容器
 evFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")  -- 切专精：换绑定槽 + 重建
 
 evFrame:SetScript("OnEvent", function(_, event)
-    if event == "PLAYER_LOGIN" then
+    if event == "PLAYER_ENTERING_WORLD" then
+        -- 进入世界：重建组集合 + 差额补齐容器（幂等；容器只在脱战创建，战斗中自动搁置）
+        B.SelectSpec()
+        RebuildGroups()
+        C_Timer.After(0, RefreshAll)
+    elseif event == "PLAYER_LOGIN" then
         B.SelectSpec()
         RebuildGroups()
         -- 登录后稍候再刷新，确保动作条按钮已就绪（ticker 兜底）
@@ -1429,10 +1554,12 @@ evFrame:SetScript("OnEvent", function(_, event)
             end
         end)
     elseif event == "PLAYER_REGEN_ENABLED" then
-        -- 脱战：解除战斗中建容器失败的限制；战斗中被搁置的重建在此补做
+        -- 脱战：解除建容器失败的限制；战斗中搁置的创建/重建在此补做（无防抖）
         for _, p in ipairs(B.groups) do p._initFailed = nil end
         if B._pendingRebuild then
-            RebuildGroups()
+            RebuildGroups()          -- 内含 EnsureContainers
+        else
+            EnsureContainers()       -- 补建战斗中搁置的容器
         end
         RefreshAll()
         if B.OnCombatChanged then B.OnCombatChanged(false) end
