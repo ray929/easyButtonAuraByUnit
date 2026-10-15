@@ -41,7 +41,7 @@ local LOCALES = {
         LEARN_ENABLE      = "Enable",
         LEARN_CLEAR       = "Clear",
         LEARN_SUPERSEDED  = " (taken over by manual binding)",
-        LEARN_TIP         = "While out of combat, scans your own timed buffs (and your debuffs on a hostile target) and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
+        LEARN_TIP         = "While out of combat, scans your own timed buffs (on you and on your pet) and your debuffs on a hostile target, and shows them on matching action bar buttons. Combat is never scanned; can be cleared anytime.",
         COL_AURA          = "Aura",
         COL_SPELL_BIND    = "Bind Spell",
         COL_SPELL         = "Spell",
@@ -64,7 +64,7 @@ local LOCALES = {
         LEARN_ENABLE      = "启用",
         LEARN_CLEAR       = "清空",
         LEARN_SUPERSEDED  = "（已被手动绑定接管）",
-        LEARN_TIP         = "脱战时扫描自身增益光环与敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；开关与条目均按专精保存，可随时清空或关闭。",
+        LEARN_TIP         = "脱战时扫描自身与宠物身上由你施放的限时光环，以及敌对目标身上的我方减益，自动显示到动作条上的同名技能按钮。战斗中绝不扫描；开关与条目均按专精保存，可随时清空或关闭。",
         COL_AURA          = "光环",
         COL_SPELL_BIND    = "绑定技能",
         COL_SPELL         = "技能",
@@ -87,7 +87,7 @@ local LOCALES = {
         LEARN_ENABLE      = "啟用",
         LEARN_CLEAR       = "清空",
         LEARN_SUPERSEDED  = "（已被手動綁定接管）",
-        LEARN_TIP         = "脫戰時掃描自身增益光環與敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；開關與條目均按專精保存，可隨時清空或關閉。",
+        LEARN_TIP         = "脫戰時掃描自身與寵物身上由你施放的限時光環，以及敵對目標身上的我方減益，自動顯示到快捷列上的同名技能按鈕。戰鬥中絕不掃描；開關與條目均按專精保存，可隨時清空或關閉。",
         COL_AURA          = "光環",
         COL_SPELL_BIND    = "綁定技能",
         COL_SPELL         = "技能",
@@ -678,15 +678,21 @@ local function IsAuraRestricted()
 end
 
 -- 学习条目单位标注：固定英文、不本地化（用户 2026-10-12 指定）。
--- 自身通道 = player + HELPFUL（增益）；目标通道 = target + HARMFUL（敌对目标身上的我方减益）。
+-- 自身通道 = player + HELPFUL（增益）；宠物通道 = pet + HELPFUL（宠物身上、玩家施放的增益，
+-- 如治疗宠物 136）；目标通道 = target + HARMFUL（敌对目标身上的我方减益）。
 B.LEARNED_TAG_SELF   = " (player buff)"
 B.LEARNED_TAG_TARGET = " (target debuff)"
+B.LEARNED_TAG_PET    = " (pet buff)"
 
 -- 学习源：needHostileTarget = 只在当前存在敌对目标时扫（target 通道）。
 -- 不扫 player-HARMFUL（2026-10-09 用户确认）：自伤类 debuff（筋疲力尽/自律这类）
--- 在动作条上没有同 ID 技能，学进去只是死条目——只扫自身增益 + 敌对目标身上的我方减益。
+-- 在动作条上没有同 ID 技能，学进去只是死条目——只扫自身增益 + 宠物增益 + 敌对目标身上的我方减益。
+-- pet 通道（2026-10-15 用户需求）：宠物身上、由玩家施放的限时增益（治疗宠物 136 这类）。
+-- 来源门禁 srcUnit=="player" 天然适配（宠物自身/队友施放的不学）；且与 player 通道共用
+-- auraID 全局去重（LearnAlreadyCovered 不区分单位）——同一光环 ID 只会进一路，不会双单位双显。
 local LEARN_SOURCES = {
     { unit = "player", filter = "HELPFUL" },
+    { unit = "pet",    filter = "HELPFUL" },
     { unit = "target", filter = "HARMFUL", needHostileTarget = true },
 }
 
@@ -1294,10 +1300,13 @@ end
 -- 合并构建：手动绑定 + 自动学习 + 内置预设 → 运行时组
 --   · 手动绑定：不选单位 → 每条自动展开成 player(HELPFUL|PLAYER) 与 target(HARMFUL|PLAYER)
 --     两个组；哪路命中显示哪路（另一路自然无匹配，代价只是每条绑定多一个容器）。
+--     ⚠️ 故意不展开 pet 通道，理由见下方手动绑定循环处的长注释（跨单位不互斥会双显，
+--     且 AuraButton 显隐是 secret、无法运行时仲裁）。
 --   · 自动学习（专精级表）：脱战扫描当前形态光环的产物，player 条目走增益通道、
---     target 条目走减益通道，总开关 + 单条停用可控。
+--     pet 条目走宠物增益通道、target 条目走减益通道，总开关 + 单条停用可控。
 --   · 预设（PresetData.lua，按职业过滤 + 专精级启停）：沿用上游过滤语义
---     （缺省 unit="player" + HELPFUL；目标减益条目自带 HARMFUL|PLAYER）。
+--     （缺省 unit="player" + HELPFUL；目标减益条目自带 HARMFUL|PLAYER；宠物增益条目
+--     显式 unit="pet" + filter="HELPFUL|PLAYER"，如治疗宠物 136）。
 --   · 合并规则：unit + filter + 技能 相同的多条来源共用一个容器
 --     （多光环任一命中即显示，也避免多容器叠在同一按钮上）。
 -- =========================================================
@@ -1353,7 +1362,15 @@ local function RebuildGroups()
         if overlayOnly then g._wantOverlayOnly = true end
     end
 
-    -- 手动绑定：双通道自动展开
+    -- 手动绑定：双通道自动展开（player 增益 + target 减益）。
+    -- ⚠️ 故意不展开 pet 通道（2026-10-15 用户需求评审结论）：pet 路与 player 路【不互斥】——
+    --    同一光环 ID 可能同时挂在玩家与宠物身上（典型：原始暴怒 264667，宠物施放版同时给
+    --    玩家和宠物挂 buff），两路都追踪就会在同一按钮上叠两个 AuraButton（两段倒计时 +
+    --    两层柔光；两份剩余时间一致时数字重合看不出，不一致时重影）。而 AuraButton 显隐是
+    --    secret，插件无法运行时仲裁「只显示一路」→ 只能从架构上规避。
+    --    宠物监控改走另外两个口子：① 预设条目显式 unit="pet"（治疗宠物 136）；
+    --    ② 学习表 pet 条目（按 auraID 全局去重，同一 ID 只会进一路）。两者都不会与
+    --    player 路同时追踪同一 ID。手动绑宠物光环的需求日后如出现，再加行内单位下拉。
     for _, cfg in ipairs(B.GetList()) do
         if cfg.auraID and cfg.bindSpell then
             addGroup("player", "HELPFUL|PLAYER", cfg.bindSpell, cfg.auraID)
@@ -1361,7 +1378,8 @@ local function RebuildGroups()
         end
     end
 
-    -- 自动学习表（专精级；总开关 + 单条停用）：player 条目走增益通道，
+    -- 自动学习表（专精级；总开关 + 单条停用）：player 条目走增益通道、
+    -- pet 条目（宠物身上、玩家施放的增益）走宠物增益通道、
     -- target 条目（敌对目标身上我方减益）走减益通道。
     -- 优先级：手动绑定 > 内置预设 > 学习条目——光环 ID 已被手动绑定或预设覆盖的
     -- 学习条目跳过（不删除；手动绑定删掉后自动恢复，预设收编的在下次扫描时清理）
@@ -1524,8 +1542,9 @@ evFrame:RegisterEvent("PLAYER_REGEN_ENABLED")       -- 脱战：补建战斗中�
 evFrame:RegisterEvent("PLAYER_REGEN_DISABLED")      -- 进战：隐藏配置窗口
 evFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")   -- 武器附魔（重附/替换/卸下）立即刷新
 evFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")     -- 同上兜底
-evFrame:RegisterUnitEvent("UNIT_AURA", "player", "target")
+evFrame:RegisterUnitEvent("UNIT_AURA", "player", "pet", "target")
 evFrame:RegisterEvent("PLAYER_TARGET_CHANGED")      -- 切目标：target 容器需手动重新解析
+evFrame:RegisterUnitEvent("UNIT_PET", "player")     -- 宠物召唤/解散/替换：pet 容器需手动重新解析
 evFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")  -- 切专精：换绑定槽 + 重建
 
 evFrame:SetScript("OnEvent", function(_, event)
@@ -1571,6 +1590,20 @@ evFrame:SetScript("OnEvent", function(_, event)
         C_Timer.After(0.05, function()
             for _, p in ipairs(B.groups) do
                 if p.unit == "target" then pcall(UpdateAuraGroup, p) end
+            end
+        end)
+    elseif event == "UNIT_PET" then
+        -- 宠物召唤/解散/替换：unit="pet" 的容器需显式重新解析（AuraContainer 不监听宠物
+        -- 身份变化——UNIT_AURA(pet) 只在光环增删时触发；同 PLAYER_TARGET_CHANGED 对 target
+        -- 的处理）。战斗中触发也安全（UpdateAllAuras 无布局写入）。
+        for _, p in ipairs(B.groups) do
+            if p.unit == "pet" and p.container then
+                pcall(function() p.container:UpdateAllAuras() end)
+            end
+        end
+        C_Timer.After(0.05, function()
+            for _, p in ipairs(B.groups) do
+                if p.unit == "pet" then pcall(UpdateAuraGroup, p) end
             end
         end)
     elseif event == "PLAYER_REGEN_ENABLED" then

@@ -338,8 +338,10 @@ local function LearnedDisplayText(e)
     else
         text = auraName
     end
-    -- 单位标注（固定英文，不本地化）：自身增益 / 敌对目标减益
-    text = text .. (((e.unit or "player") == "target") and B.LEARNED_TAG_TARGET or B.LEARNED_TAG_SELF)
+    -- 单位标注（固定英文，不本地化）：自身增益 / 敌对目标减益 / 宠物增益
+    local u = e.unit or "player"
+    text = text .. (u == "target" and B.LEARNED_TAG_TARGET
+        or (u == "pet" and B.LEARNED_TAG_PET or B.LEARNED_TAG_SELF))
     -- 该光环已被当前专精手动绑定接管 → 标注（运行时该条目不生效，删掉手动绑定即自动恢复）
     if B.IsAuraManuallyBound and B.IsAuraManuallyBound(e.auraID) then
         text = text .. L("LEARN_SUPERSEDED")

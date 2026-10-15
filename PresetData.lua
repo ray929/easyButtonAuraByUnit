@@ -202,4 +202,12 @@ B.PRESET_DATA = {
     -- ⚠️ 放在表尾：预设启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会使
     -- 后续条目的禁用记录错位。
     { class = "SHAMAN", auraSpellID = 443454, actionSpellID = 443454, overlayOnly = true }, -- 先祖迅捷（无持续时间，先知天赋取代自然迅捷）
+
+    -- 治疗宠物 136：宠物身上、由【玩家】施放的 Hot（10s）。unit="pet" + filter="HELPFUL|PLAYER"
+    -- = 只追踪玩家自己施放到宠物身上的增益（宠物自身/队友施放的不显示）。
+    -- ⚠️ 放在表尾：预设启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会使
+    --    后续条目的禁用记录错位。
+    -- 按钮注意：Mend Pet 与 Revive Pet 共享动作条按钮——宠物死亡时按钮变为 Revive Pet，
+    -- 按法术名解析不到 Mend Pet 的按钮 → 容器停靠；宠物复活后自愈恢复（ResolveButton 既有机制）。
+    { class = "HUNTER", auraSpellID = 136, actionSpellID = 136, unit = "pet", filter = "HELPFUL|PLAYER" }, -- 治疗宠物（宠物 Hot）
 }
