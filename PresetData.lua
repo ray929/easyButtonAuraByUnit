@@ -15,7 +15,8 @@
 --     · unit/filter 可选：默认 player + HELPFUL；目标减益必须写 unit="target" +
 --       filter="HARMFUL|PLAYER"（|PLAYER=只追踪玩家自己施放的，2026-08-19 烈焰震击踩坑）
 --   武器附魔预设：{ class = "SHAMAN", enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" }
---     · 走 GetWeaponEnchantInfo 战斗安全通道（独立覆盖层 + 1 秒 ticker）
+--     · 走 C_PaperDollInfo.GetTemporaryEnchantmentInfo 战斗安全通道
+--       （独立覆盖层 + 1 秒 ticker；旧 API GetWeaponEnchantInfo 已 deprecated）
 --   无持续时间光环预设：{ auraSpellID = 378081, actionSpellID = 378081, overlayOnly = true }
 --     · 形态/瞬发开关类光环没有持续时间可显示：不挂倒计时框/层数，存在标记与其他
 --       光环同款（CDMButtonAuras 柔光，自身=绿），随暴雪按钮显隐。

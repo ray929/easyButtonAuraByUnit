@@ -7,7 +7,9 @@
 --     两路容器，哪路命中显示哪路（另一路自然无匹配，代价只是每条绑定多一个容器）。
 --   · 内置预设：上游 PresetData 全量移植（见 PresetData.lua，按职业过滤），配置窗口「预设」区
 --     逐条启用/禁用（专精级覆盖，缺省启用）。含武器临时附魔（火舌/风怒/裁决仪式等，
---     GetWeaponEnchantInfo 战斗安全通道，独立覆盖层 + 1 秒 ticker，不参与合并，两把武器独立计时）。
+--     C_PaperDollInfo.GetTemporaryEnchantmentInfo 战斗安全通道——旧 API GetWeaponEnchantInfo
+--     已于 12.1.0 deprecated、下个资料片移除，故只走新 API；独立覆盖层 + 1 秒 ticker，
+--     不参与合并，两把武器独立计时）。
 --   · 光环渲染沿用上游 12.1 官方安全通道【AuraContainer】（暴雪渲染层）：
 --     addon 零读取光环数据、零 secret/taint 问题；倒计时 / 层数 / 显隐全部由暴雪驱动。
 --   · 合并规则：多条绑定指向同一单位 + 同一技能时，运行时合并成一个 includeSpellIDs 集合、
@@ -1156,23 +1158,23 @@ end
 
 -- =========================================================
 -- 类型 B：武器临时附魔（预设数据见 PresetData.lua，走 enchantID 通道）
---   走 item enchant 通道（非 unit aura），12.1 战斗中也能检测（GetWeaponEnchantInfo 战斗安全）。
---   主路径 GetWeaponEnchantInfo()（返回 enchantID + 剩余毫秒），兜底
---   C_PaperDollInfo.GetTemporaryEnchantmentInfo（12.1 官方替代 API）。
+--   走 item enchant 通道（非 unit aura），12.1 战斗中也能检测。
+--   API：C_PaperDollInfo.GetTemporaryEnchantmentInfo（12.1 起的新 API）。
+--   ⚠️ 旧 API GetWeaponEnchantInfo 已于 12.1.0 标记 deprecated，弃用回退会在下个资料片
+--      移除（核实 2026-10-15，wiki GetWeaponEnchantInfo / Deprecated_12_1_0.lua）→ 本插件
+--      只走新 API，不再保留旧路径。
+--   ⚠️ 该 API 谓词含 AllowedWhenUntainted：tainted 代码调用会返回 secret 值 → 必须过
+--      IsSecret 判定，secret 时放弃该槽（宁可不显示，绝不比较 secret 数值）。
 -- =========================================================
 local function GetWeaponEnchantExpiration(enchantID)
-    -- 主路径：旧 API（上游实测 12.1 仍可用）
-    local ok, hasMain, mainExp, _, mainID, hasOff, offExp, _, offID = pcall(GetWeaponEnchantInfo)
-    if ok then
-        if mainID == enchantID and mainExp then return mainExp / 1000 end
-        if offID == enchantID and offExp then return offExp / 1000 end
-    end
-    -- 兜底：12.1 新 API。返回结构 TemporaryItemEnchantInfo{enchantID, remainingTimeMs, ...}
     local function trySlot(slot)
-        local fok, info = pcall(C_PaperDollInfo.GetTemporaryEnchantmentInfo, slot)
-        if fok and info and info.enchantID == enchantID and info.remainingTimeMs then
-            return info.remainingTimeMs / 1000
-        end
+        local ok, info = pcall(C_PaperDollInfo.GetTemporaryEnchantmentInfo, slot)
+        -- MayReturnNothing：无临时附魔时返回 nil
+        if not ok or type(info) ~= "table" then return end
+        if info.enchantID ~= enchantID then return end
+        -- 双保险：enchantID / remainingTimeMs 任一为 secret 即放弃该槽
+        if IsSecret(info.enchantID) or IsSecret(info.remainingTimeMs) then return end
+        if info.remainingTimeMs then return info.remainingTimeMs / 1000 end
     end
     for _, slot in ipairs({ 16, 17 }) do  -- INVSLOT_MAINHAND, INVSLOT_OFFHAND
         local sec = trySlot(slot)

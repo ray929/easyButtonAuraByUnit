@@ -1,4 +1,4 @@
-## Interface: 120100, 16001
+## Interface: 120100, 120105, 16001
 ## Title: Easy Button Aura by Unit
 ## Notes: Bind aura IDs to action bar buttons manually or toggle built-in presets; buttons show remaining time and stacks with a soft edge glow.
 ## Notes-zhCN: 手动绑定光环 ID 到动作条按钮，或启用内置预设；按钮上显示光环剩余时间、层数与柔光标记。
