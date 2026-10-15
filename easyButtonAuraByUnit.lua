@@ -1484,20 +1484,24 @@ function B.ScheduleRefresh(delay)
 end
 
 -- =========================================================
--- 事件驱动（事件集合与防抖策略照搬上游 Preset.lua）
+-- 事件驱动（防抖策略照搬上游 Preset.lua；事件集合已与 byCDM 对齐）
 -- =========================================================
--- 动作条/页面/形态/载具/御龙术/专精切换：缓存失效 + 延迟重匹配。
+-- 动作条/页面/形态/载具/御龙术/专精/天赋切换：缓存失效 + 延迟重匹配。
+-- ⚠️ PLAYER_TALENT_UPDATE 取代上游 Preset.lua 的 ACTIVE_TALENT_GROUP_CHANGED（2026-10-15，
+--    与 byCDM 对齐）：wiki 明确切天赋组时 PLAYER_TALENT_UPDATE 必触发，且它还覆盖
+--    「不改专精只改天赋点、天赋变体取代原技能致按钮技能名变化」的场景（先祖迅捷 443454
+--    取代自然迅捷 378081 那类坑）。
 -- ⚠️ 绝不【立即】刷新：ACTIONBAR_PAGE_CHANGED 等事件在 SetActionBarPage 的保护上下文
 --    同步触发，立即操作容器会被 taint/block，导致倒计时框错位。
 local actionbarEvents = {
     ACTIONBAR_SLOT_CHANGED       = true,
     ACTIONBAR_PAGE_CHANGED       = true,
-    ACTIVE_TALENT_GROUP_CHANGED  = true,
     UPDATE_BONUS_ACTIONBAR       = true,
     UPDATE_OVERRIDE_ACTIONBAR    = true,
     UPDATE_SHAPESHIFT_FORM       = true,
     UPDATE_POSSESS_BAR           = true,
     UPDATE_MULTI_CAST_ACTIONBAR  = true,
+    PLAYER_TALENT_UPDATE         = true,
 }
 
 local function InvalidateButtons()
