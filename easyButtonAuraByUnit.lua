@@ -216,6 +216,23 @@ function B.GetSpellDisplayName(spellID)
     return tostring(spellID)
 end
 
+-- 取本地化法术名（明文）；取不到 / 是 secret 时返回 nil。
+-- 用途：Forever（永恒）里同一技能的每个等级是【不同的 spellID、不同的光环 ID】，只有名字
+-- 相同——绑定按名字解析才不会被"升一级就多绑一条"绑架（见 RebuildGroups 的名字展开）。
+function B.GetSpellNamePlain(spellID)
+    if not spellID then return nil end
+    local ok, name
+    if C_Spell and C_Spell.GetSpellName then
+        ok, name = pcall(C_Spell.GetSpellName, spellID)
+    elseif GetSpellInfo then
+        ok, name = pcall(GetSpellInfo, spellID)
+    end
+    if ok and type(name) == "string" and name ~= "" and not IsSecret(name) then
+        return name
+    end
+    return nil
+end
+
 function B.GetSpellIcon(spellID)
     if not spellID then return nil end
     local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
@@ -302,10 +319,17 @@ function B.GetList()
     return {}
 end
 
--- 该光环 ID 是否已被当前专精的手动绑定覆盖（手动 > 学习 优先级判据）
-function B.IsAuraManuallyBound(auraID)
+-- 该光环是否已被当前专精的手动绑定覆盖（手动 > 学习 优先级判据）。
+-- 名字也要比：Forever 里同一技能各等级的光环 ID 各不相同，只比 ID 会让"旧等级手动绑过、
+-- 新等级又被自动学习收编"→ 同一按钮上两个容器（双份数字/柔光）。
+function B.IsAuraManuallyBound(auraID, auraName)
     for _, cfg in ipairs(B.GetList()) do
         if cfg.auraID == auraID then return true end
+        if auraName and cfg.auraID then
+            if (cfg.auraName or B.GetSpellNamePlain(cfg.auraID)) == auraName then
+                return true
+            end
+        end
     end
     return false
 end
@@ -328,11 +352,19 @@ function B.DeleteBinding(index)
 end
 
 -- 更新某条绑定的字段（auraID / bindSpell）
+-- 同时记下对应的本地化名字：Forever 里同一技能各等级 ID 不同、名字相同，匹配以名字为准
+-- （升级换 Rank 后无需重新绑定）。取不到名字（如用户直接填了个非法术的光环 ID）时置 nil，
+-- 该侧退回纯 ID 匹配。
 function B.UpdateBinding(index, key, value)
     local list = B.GetList()
     local cfg = list[index]
     if cfg then
         cfg[key] = value
+        if key == "auraID" then
+            cfg.auraName = value and B.GetSpellNamePlain(value) or nil
+        elseif key == "bindSpell" then
+            cfg.bindName = value and B.GetSpellNamePlain(value) or nil
+        end
         B.NotifyBindingsChanged()
     end
 end
@@ -530,10 +562,128 @@ local function ResolveActionSpellID(btn)
     end
 end
 
+-- =========================================================
+-- 法术名索引：本地化名 → 同名全部法术 ID（Forever 同一技能各等级 / 各 Rank 是不同 spellID，
+-- 光环 ID 也随之不同，只有名字相同）。
+-- 数据源：① 动作条上的可见按钮（玩家此刻实际施放的等级）；② 法术书（若客户端可读）。
+-- ⚠️ 法术书 API 带 MayReturnNothing / AllowedWhenUntainted 谓词：tainted（插件）调用可能
+--    返回 secret 值 → 字段级 IsSecret 防护 + 整体 pcall，读不到就只靠动作条那一路，
+--    宁缺勿错（绝不比较 secret 数值）。
+-- bar[name] 只收动作条按钮的 ID（配置窗口「不在动作条上」提示用，不含法术书）。
+-- =========================================================
+local spellNameIndex
+local InvalidateSpellNameIndex   -- 前置声明（InvalidateButtons 里调用）
+
+local function BuildSpellNameIndex()
+    local idx = { byName = {}, bar = {} }
+    local function add(spellID, name, onBar)
+        -- ⚠️ IsSecret 必须在任何比较/取值之前：secret 值不能参与比较（会 hard-error）
+        if IsSecret(spellID) or IsSecret(name) then return end
+        if type(spellID) ~= "number" or spellID <= 0 then return end
+        if type(name) ~= "string" or name == "" then return end
+        local set = idx.byName[name]
+        if not set then set = {}; idx.byName[name] = set end
+        set[spellID] = true
+        if onBar then
+            local b = idx.bar[name]
+            if not b then b = {}; idx.bar[name] = b end
+            b[spellID] = true
+        end
+    end
+
+    -- ① 动作条（复用栏位并集；含宏按钮解析）
+    for _, prefix in ipairs(GetBarPrefixList()) do
+        for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
+            local btn = _G[prefix .. i]
+            if btn and btn.action then
+                local id = ResolveActionSpellID(btn)
+                if id then add(id, B.GetSpellNamePlain(id), true) end
+            end
+        end
+    end
+
+    -- ② 法术书（C_SpellBook；缺失 / 抛错 / secret 时静默跳过）
+    pcall(function()
+        if not (C_SpellBook and C_SpellBook.GetNumSpellBookSkillLines
+            and C_SpellBook.GetSpellBookSkillLineInfo
+            and C_SpellBook.GetSpellBookItemInfo) then
+            return
+        end
+        local bank = (Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player) or 0
+        local spellItemType = (Enum and Enum.SpellBookItemType and Enum.SpellBookItemType.Spell) or 1
+        for i = 1, C_SpellBook.GetNumSpellBookSkillLines() do
+            local line = C_SpellBook.GetSpellBookSkillLineInfo(i)
+            if line and line.itemIndexOffset and line.numSpellBookItems then
+                for j = line.itemIndexOffset + 1, line.itemIndexOffset + line.numSpellBookItems do
+                    local item = C_SpellBook.GetSpellBookItemInfo(j, bank)
+                    if item then
+                        -- 逐项 pcall：单项字段是 secret 时只跳过这一项，不连坐整本书
+                        local okType, isSpell = pcall(function()
+                            return item.itemType == spellItemType
+                        end)
+                        if okType and isSpell then
+                            local id = item.spellID or item.actionID
+                            if id and not IsSecret(id) then
+                                add(id, B.GetSpellNamePlain(id) or item.name)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    return idx
+end
+
+-- 名字索引带缓存（失效点：动作条事件 / 法术书变化 / 升级 / 专精切换 / 脱战）。
+function B.GetSpellNameIndex()
+    if not spellNameIndex then spellNameIndex = BuildSpellNameIndex() end
+    return spellNameIndex
+end
+
+function InvalidateSpellNameIndex()
+    spellNameIndex = nil
+end
+
+-- 一条手动绑定的「当前施放技能 ID」：优先按名字找条上的按钮（升级换 Rank 后按钮上的
+-- ID 变了、名字不变），找不到时回退存盘 ID（此时由 UpdateAuraGroup 的 IsPlayerSpell /
+-- 按钮解析门禁决定去留）。
+local function ResolveBindingSpell(cfg, idx)
+    local name = cfg.bindName or B.GetSpellNamePlain(cfg.bindSpell)
+    if name then
+        local barIDs = idx.bar[name]
+        if barIDs then
+            for id in pairs(barIDs) do return id, name end
+        end
+    end
+    return cfg.bindSpell, name
+end
+
+-- 一条手动绑定实际追踪的光环 ID 集合：
+--   · 存盘的光环 ID（可能是升级前的旧 Rank）
+--   · 光环名同名下的全部 ID（动作条 + 法术书 → 覆盖已学过的各等级 / 各 Rank）
+--   · 光环名 == 施放技能名时（绝大多数，如 暗言术：痛），再把施放技能的当前 ID 纳入
+--     （Forever 里光环 ID 通常就是该 Rank 的技能 ID，双保险）
+-- 多纳入的 ID 只会命中「同名技能」的光环，不会误显示别的技能。
+local function CollectBindingAuraIDs(cfg, idx, actionSpellID, actionName)
+    local set = {}
+    local auraName = cfg.auraName or B.GetSpellNamePlain(cfg.auraID)
+    if cfg.auraID then set[cfg.auraID] = true end
+    if auraName then
+        for id in pairs(idx.byName[auraName] or {}) do set[id] = true end
+        if actionName == auraName and type(actionSpellID) == "number" then
+            set[actionSpellID] = true
+        end
+    end
+    return set
+end
+
 -- 按钮缓存解析（含自愈验证）：切专精/翻页后按钮可能已换成别的技能，用 GetActionInfo +
 -- 名字比对验证缓存，失效即作废重找（上游 2026-08-21 修「切专精后剩余时间滞留」）。
+-- ⚠️ 有 p.actionName 时一律用它：Forever 升级换 Rank 后存盘的 actionSpellID 可能已不存在，
+--    由 ID 反查名字会落空；名字在换 Rank 前后不变。
 local function ResolveButton(p, actionSpellID)
-    local actionName = C_Spell.GetSpellName(actionSpellID)
+    local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
     if p.button and p.button.action ~= nil then
         local okA, _, curSpellID = pcall(GetActionInfo, p.button.action)
         local curName = (okA and curSpellID) and C_Spell.GetSpellName(curSpellID) or nil
@@ -723,10 +873,19 @@ local function PresetCoversAura(auraID)
     return false
 end
 
-local function LearnAlreadyCovered(auraID, seen)
+-- 去重同样按名字兜一层：Forever 里同一技能各等级的光环 ID 不同，只比 ID 会把"新等级"
+-- 当成全新条目再学一遍（旧等级已学/已手动绑定的同名光环应当收编）。
+local function LearnAlreadyCovered(auraID, seen, auraName)
     if seen[auraID] then return true end
     for _, cfg in ipairs(B.GetList()) do
         if cfg.auraID == auraID then return true end
+    end
+    if auraName then
+        for _, e in ipairs(B.GetLearnedList()) do
+            if e.auraID and (e.auraName or B.GetSpellNamePlain(e.auraID)) == auraName then
+                return true
+            end
+        end
     end
     for _, e in ipairs(B.PRESET_DATA or {}) do
         if type(e.auraSpellID) == "table" then
@@ -821,15 +980,17 @@ local function ScanLearnableAuras(verbose)
                 local spellID = data.spellId
                 local exp = data.expirationTime
                 local srcUnit = data.sourceUnit
+                -- 光环名（明文）：同样用于去重（各等级只学一次）与随后按名字展开各 Rank
+                local auraName = (type(data.name) == "string" and not IsSecret(data.name)) and data.name or nil
 
                 if not spellID or IsSecret(spellID) then
                     log("aura @%d: spellId missing/secret, skipped", index - 1)
                 elseif not exp or IsSecret(exp) or exp <= 0 then
-                    log("%s (%s): no expiration (passive/form), skipped", tostring(data.name), tostring(spellID))
-                elseif B.IsAuraManuallyBound(spellID) then
-                    log("%s (%d): already manually bound (manual takes precedence), skipped", data.name, spellID)
-                elseif LearnAlreadyCovered(spellID, seen) then
-                    log("%s (%d): already covered by preset/learned, skipped", data.name, spellID)
+                    log("%s (%s): no expiration (passive/form), skipped", tostring(auraName), tostring(spellID))
+                elseif B.IsAuraManuallyBound(spellID, auraName) then
+                    log("%s (%d): already manually bound (manual takes precedence), skipped", tostring(auraName), spellID)
+                elseif LearnAlreadyCovered(spellID, seen, auraName) then
+                    log("%s (%d): already covered by preset/learned, skipped", tostring(auraName), spellID)
                 elseif srcUnit ~= "player" or IsSecret(srcUnit) then
                     -- 来源判断放在覆盖判断之后：预设收编的光环（如宠物施放的原始暴怒 264667）
                     -- 先按 covered 报告真实归属，避免「not self-cast」误导排查方向。
@@ -847,8 +1008,8 @@ local function ScanLearnableAuras(verbose)
                     if buttonMap[spellID] then
                         actionSpellID = spellID
                         matchPath = "id"
-                    elseif data.name and not IsSecret(data.name) then
-                        local aid = ResolveActionSpellID(FindActionButtonForSpellName(data.name))
+                    elseif auraName then
+                        local aid = ResolveActionSpellID(FindActionButtonForSpellName(auraName))
                         if aid then
                             actionSpellID = aid
                             matchPath = "name"
@@ -874,12 +1035,15 @@ local function ScanLearnableAuras(verbose)
                     else
                         learned[#learned + 1] = {
                             auraID = spellID,
+                            auraName = auraName,
                             actionSpellID = actionSpellID,
+                            actionName = B.GetSpellNamePlain(actionSpellID),
                             unit = src.unit,
                         }
                         seen[spellID] = true
                         added = added + 1
-                        log("%s (%d) -> spell %d [%s, %s] LEARNED", data.name, spellID, actionSpellID, matchPath, src.unit)
+                        log("%s (%d) -> spell %d [%s, %s] LEARNED",
+                            tostring(auraName), spellID, actionSpellID, matchPath, src.unit)
                     end
                 end
             end
@@ -1341,8 +1505,11 @@ local function RebuildGroups()
     end
 
     local merged, order = {}, {}
-    local function addGroup(unit, filter, actionSpellID, auraID, overlayOnly)
-        local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionSpellID)
+    -- key 以【技能名】为基准（而非 spellID）：Forever 升级换 Rank 后施放技能的 spellID 变了，
+    -- 用名字才能复用同一个容器（否则每升一级就多一个停泊屏幕外的旧容器）。
+    -- auraIDs 是集合：一条绑定可以同时追踪同名技能的各等级光环 ID。
+    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly)
+        local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionName or actionSpellID)
         local g = merged[key]
         if not g then
             g = oldByKey[key]
@@ -1355,10 +1522,11 @@ local function RebuildGroups()
             end
             g.key = key
             g.unit, g.filter, g.actionSpellID = unit, filter, actionSpellID
+            g.actionName = actionName
             merged[key] = g
             order[#order + 1] = g
         end
-        g.auraIDs[auraID] = true
+        for id in pairs(auraIDs) do g.auraIDs[id] = true end
         if overlayOnly then g._wantOverlayOnly = true end
     end
 
@@ -1371,10 +1539,15 @@ local function RebuildGroups()
     --    宠物监控改走另外两个口子：① 预设条目显式 unit="pet"（治疗宠物 136）；
     --    ② 学习表 pet 条目（按 auraID 全局去重，同一 ID 只会进一路）。两者都不会与
     --    player 路同时追踪同一 ID。手动绑宠物光环的需求日后如出现，再加行内单位下拉。
+    -- 名字解析：升级换 Rank 后存盘的 auraID / bindSpell 都是旧 ID，按名字重新展开成
+    -- 「该名字此刻的全部 ID」，绑定一次即可跨等级生效（见 CollectBindingAuraIDs）。
+    local nameIndex = B.GetSpellNameIndex()
     for _, cfg in ipairs(B.GetList()) do
         if cfg.auraID and cfg.bindSpell then
-            addGroup("player", "HELPFUL|PLAYER", cfg.bindSpell, cfg.auraID)
-            addGroup("target", "HARMFUL|PLAYER", cfg.bindSpell, cfg.auraID)
+            local actionSpellID, actionName = ResolveBindingSpell(cfg, nameIndex)
+            local auraIDs = CollectBindingAuraIDs(cfg, nameIndex, actionSpellID, actionName)
+            addGroup("player", "HELPFUL|PLAYER", actionSpellID, actionName, auraIDs)
+            addGroup("target", "HARMFUL|PLAYER", actionSpellID, actionName, auraIDs)
         end
     end
 
@@ -1385,12 +1558,27 @@ local function RebuildGroups()
     -- 学习条目跳过（不删除；手动绑定删掉后自动恢复，预设收编的在下次扫描时清理）
     if B.IsLearnEnabled() then
         for _, e in ipairs(B.GetLearnedList()) do
+            local auraName = e.auraName or B.GetSpellNamePlain(e.auraID)
             if not e.disabled and e.auraID and e.actionSpellID
-                and not B.IsAuraManuallyBound(e.auraID)
+                and not B.IsAuraManuallyBound(e.auraID, auraName)
                 and not PresetCoversAura(e.auraID) then
                 local unit = e.unit or "player"
                 local filter = (unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
-                addGroup(unit, filter, e.actionSpellID, e.auraID)
+                -- 学过一次也要跟着升到新 Rank：按名字展开光环 ID，施放技能换成条上
+                -- 当前 Rank 的 ID（按钮解析走名字，两者配对即可）
+                local ids = { [e.auraID] = true }
+                if auraName then
+                    for id in pairs(nameIndex.byName[auraName] or {}) do ids[id] = true end
+                end
+                local actionName = e.actionName or B.GetSpellNamePlain(e.actionSpellID)
+                local actionSpellID = e.actionSpellID
+                if actionName then
+                    local barIDs = nameIndex.bar[actionName]
+                    if barIDs then
+                        for id in pairs(barIDs) do actionSpellID = id; break end
+                    end
+                end
+                addGroup(unit, filter, actionSpellID, actionName, ids)
             end
         end
     end
@@ -1411,8 +1599,9 @@ local function RebuildGroups()
                 local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
                 local unit = e.unit or "player"
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
+                local actionName = B.GetSpellNamePlain(e.actionSpellID)
                 for _, id in ipairs(ids) do
-                    addGroup(unit, filter, e.actionSpellID, id, e.overlayOnly)
+                    addGroup(unit, filter, e.actionSpellID, actionName, { [id] = true }, e.overlayOnly)
                 end
             end
         end
@@ -1523,6 +1712,7 @@ local actionbarEvents = {
 }
 
 local function InvalidateButtons()
+    InvalidateSpellNameIndex()   -- 条上的技能变了 → 名字索引（含各 Rank 的 ID）要重建
     for _, p in ipairs(B.groups) do
         p.button = nil
         p._rectL, p._rectB, p._rectW, p._rectH = nil, nil, nil, nil
@@ -1546,6 +1736,8 @@ evFrame:RegisterUnitEvent("UNIT_AURA", "player", "pet", "target")
 evFrame:RegisterEvent("PLAYER_TARGET_CHANGED")      -- 切目标：target 容器需手动重新解析
 evFrame:RegisterUnitEvent("UNIT_PET", "player")     -- 宠物召唤/解散/替换：pet 容器需手动重新解析
 evFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")  -- 切专精：换绑定槽 + 重建
+evFrame:RegisterEvent("SPELLS_CHANGED")             -- 法术书变化（学新技能 / 新 Rank）：名字索引失效 + 重建
+evFrame:RegisterEvent("PLAYER_LEVEL_UP")            -- 升级（Forever 会学到同一技能的新 Rank）
 
 evFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_ENTERING_WORLD" then
@@ -1606,8 +1798,15 @@ evFrame:SetScript("OnEvent", function(_, event)
                 if p.unit == "pet" then pcall(UpdateAuraGroup, p) end
             end
         end)
+    elseif event == "SPELLS_CHANGED" or event == "PLAYER_LEVEL_UP" then
+        -- 法术书变化 / 升级（Forever 会学到同一技能的新 Rank）：名字索引失效并重建组
+        -- （升级换 Rank 后 auraID / spellID 全变，只靠存盘 ID 会显示不出来）。
+        -- RebuildGroups 战斗中自动搁置到脱战（_pendingRebuild）。
+        InvalidateButtons()
+        B.NotifyBindingsChanged()
     elseif event == "PLAYER_REGEN_ENABLED" then
         -- 脱战：解除建容器失败的限制；战斗中搁置的创建/重建在此补做（无防抖）
+        InvalidateSpellNameIndex()   -- 战斗中读法术书可能只拿到 secret → 脱战后重建索引
         for _, p in ipairs(B.groups) do p._initFailed = nil end
         if B._pendingRebuild then
             RebuildGroups()          -- 内含 EnsureContainers
@@ -1626,6 +1825,7 @@ evFrame:SetScript("OnEvent", function(_, event)
         RefreshEnchants()
     elseif event == "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" then
         B.SelectSpec()
+        InvalidateSpellNameIndex()   -- 专精切换换掉整套技能 / Rank
         ScheduleRebuild(0.2)
         if B.RefreshPanel then B.RefreshPanel() end
     end

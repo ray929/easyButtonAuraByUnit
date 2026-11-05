@@ -216,7 +216,7 @@ local function CreateRow(index)
     return row
 end
 
-local function UpdateRow(row, index, buttonMap)
+local function UpdateRow(row, index, nameIndex)
     local list = B.GetList()
     local cfg = list[index] or {}
 
@@ -237,9 +237,17 @@ local function UpdateRow(row, index, buttonMap)
         row.spellEdit:SetText(spellName)
     end
 
-    if cfg.bindSpell and not buttonMap[cfg.bindSpell] then
-        row.status:SetText(L("STATUS_NOT_ON_BAR"))
-        row.status:SetTextColor(1, 0.4, 0.4)
+    -- 状态按【技能名】判断：Forever 升级换 Rank 后存盘 bindSpell 是旧 ID，用 ID 比对会
+    -- 一直误报"不在动作条上"（实际条上就是同一技能的新 Rank）。
+    if cfg.bindSpell then
+        local bindName = cfg.bindName or B.GetSpellNamePlain(cfg.bindSpell)
+        if not (bindName and nameIndex.bar[bindName]) then
+            row.status:SetText(L("STATUS_NOT_ON_BAR"))
+            row.status:SetTextColor(1, 0.4, 0.4)
+            row.status:Show()
+        else
+            row.status:SetText("")
+        end
     else
         row.status:SetText("")
     end
@@ -343,7 +351,8 @@ local function LearnedDisplayText(e)
     text = text .. (u == "target" and B.LEARNED_TAG_TARGET
         or (u == "pet" and B.LEARNED_TAG_PET or B.LEARNED_TAG_SELF))
     -- 该光环已被当前专精手动绑定接管 → 标注（运行时该条目不生效，删掉手动绑定即自动恢复）
-    if B.IsAuraManuallyBound and B.IsAuraManuallyBound(e.auraID) then
+    -- 名字也要比：Forever 各等级光环 ID 不同，手动绑的旧 Rank 同样接管新 Rank 的学习条目
+    if B.IsAuraManuallyBound and B.IsAuraManuallyBound(e.auraID, e.auraName or B.GetSpellNamePlain(e.auraID)) then
         text = text .. L("LEARN_SUPERSEDED")
     end
     return text
@@ -432,10 +441,10 @@ local function DoRefresh()
         configFrame.enableCheck:SetChecked(B.IsEnabled())
     end
 
-    -- 手动绑定行
+    -- 手动绑定行（名字索引含动作条 + 法术书，用于「不在动作条上」状态与各 Rank 展开）
     local list = B.GetList()
     local count = #list
-    local buttonMap = B.BuildSpellButtonMap()
+    local nameIndex = B.GetSpellNameIndex()
 
     for i = 1, count do
         local row = rows[i]
@@ -446,7 +455,7 @@ local function DoRefresh()
         row.index = i
         row.icon.spellID = nil
         row:Show()
-        UpdateRow(row, i, buttonMap)
+        UpdateRow(row, i, nameIndex)
     end
     for i = count + 1, #rows do
         rows[i].index = nil

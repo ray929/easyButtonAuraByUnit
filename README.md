@@ -6,6 +6,7 @@
 
 - Built-in presets (~90 entries + the class-agnostic Renewal) with per-entry toggles, and full manual binding for anything else. Retail only — presets are disabled on other clients (different spell/aura ID sets).
 - No unit dropdown: every binding automatically covers both channels — your own buffs and your debuffs on a hostile target — whichever matches, shows. Buffs you cast on your pet (e.g. Mend Pet) are covered by the pet preset and auto-learn instead of manual bindings.
+- Bindings match by spell name: on clients where every rank of a spell has its own spell and aura ID (e.g. WoW Forever), bind once and it keeps working as you level up and learn higher ranks — no need to bind the same spell again.
 - Auto-learn: while out of combat, your own timed buffs (on you and on your pet) and your debuffs on a hostile target matching action bar spells are bound automatically (per specialization).
 - One aura ID is never tracked on both you and your pet at the same time — learn dedups by aura ID and presets declare their unit explicitly — so an aura that sits on both units (e.g. Primal Rage) shows only once.
 - Duration-less auras (forms / instant toggles, e.g. Nature's Swiftness, Ancestral Swiftness, Ghost Wolf) show a translucent green mask instead of a countdown.
@@ -22,6 +23,7 @@
 
 - 内置预设（约 90 条 + 全职业通用的复原），可逐条启停；其余光环全手动绑定，完全自主可控。预设仅限正式服——其他客户端（ID 体系不同）自动停用。
 - 不选追踪单位：每条绑定自动同时挂「自身增益」与「施放到敌对目标的减益」两路，哪路命中显示哪路。你施放到宠物身上的增益（如治疗宠物）由宠物预设与自动学习覆盖，不走手动绑定。
+- 绑定按技能名匹配：在同一技能的每个等级都各自拥有独立法术 / 光环 ID 的客户端（如《魔兽世界：永恒》）里，绑定一次即可随等级提升自动跟随新等级，不必每升一级重绑一遍。
 - 自动学习：脱战时扫描自身与宠物身上由你施放的限时增益、以及敌对目标身上的我方减益，匹配动作条上的技能自动绑定（按专精保存）。
 - 同一个光环 ID 不会同时挂在「你」和「宠物」两路上——学习表按光环 ID 全局去重、预设逐条显式声明单位——因此玩家与宠物身上各有一份的光环（如原始暴怒）只会显示一次。
 - 无持续时间的光环（形态/瞬发开关，如自然迅捷、先祖迅捷、幽魂之狼）不显示倒计时，仅以绿色半透明遮罩标记。
@@ -38,6 +40,7 @@
 
 - 內建預設（約 90 條 + 全職業通用的復原），可逐條啟停；其餘光環全手動綁定，完全自主可控。預設僅限正式服——其他用戶端（ID 體系不同）自動停用。
 - 不選追蹤單位：每條綁定自動同時掛「自身增益」與「施放到敵對目標的減益」兩路，哪路命中顯示哪路。你施放到寵物身上的增益（如治療寵物）由寵物預設與自動學習覆蓋，不走手動綁定。
+- 綁定按技能名稱比對：在同一技能每個等級都各自擁有獨立法術／光環 ID 的用戶端（如《魔獸世界：永恆》）裡，綁定一次即可隨等級提升自動跟隨新等級，不必每升一級重綁一遍。
 - 自動學習：脫戰時掃描自身與寵物身上由你施放的限時增益、以及敵對目標身上的我方減益，符合快捷列上技能的自動綁定（按專精保存）。
 - 同一個光環 ID 不會同時掛在「你」和「寵物」兩路上——學習表按光環 ID 全域去重、預設逐條顯式宣告單位——因此玩家與寵物身上各有一份的光環（如原始暴怒）只會顯示一次。
 - 無持續時間的光環（形態／瞬發開關，如自然迅捷、先祖迅捷、幽魂之狼）不顯示倒計時，僅以綠色半透明遮罩標記。
