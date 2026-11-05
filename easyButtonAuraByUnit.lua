@@ -944,9 +944,25 @@ local function ScanLearnableAuras(verbose)
             pruned = pruned + 1
         end
     end
+    local nameIndex = B.GetSpellNameIndex()
+    -- seen 同时纳入「同名各 Rank」的展开集合：新 Rank 不会被当成全新条目再学一遍
     local seen = {}
     for _, e in ipairs(learned) do
         seen[e.auraID] = true
+        local n = e.auraName or B.GetSpellNamePlain(e.auraID)
+        if n then
+            for id in pairs(nameIndex.byName[n] or {}) do seen[id] = true end
+        end
+    end
+    -- 手动绑定覆盖的光环 ID 集合（与 RebuildGroups 同一套名字展开逻辑）：
+    -- 比「光环名 == 绑定名」更稳——即便客户端给出的光环名带等级后缀也能命中
+    local manualCovered = {}
+    for _, cfg in ipairs(B.GetList()) do
+        if cfg.auraID then
+            for id in pairs(CollectBindingAuraIDs(cfg, nameIndex)) do
+                manualCovered[id] = true
+            end
+        end
     end
     if pruned > 0 and report then
         log("pruned %d learned entries now covered by presets", pruned)
@@ -987,7 +1003,7 @@ local function ScanLearnableAuras(verbose)
                     log("aura @%d: spellId missing/secret, skipped", index - 1)
                 elseif not exp or IsSecret(exp) or exp <= 0 then
                     log("%s (%s): no expiration (passive/form), skipped", tostring(auraName), tostring(spellID))
-                elseif B.IsAuraManuallyBound(spellID, auraName) then
+                elseif manualCovered[spellID] or B.IsAuraManuallyBound(spellID, auraName) then
                     log("%s (%d): already manually bound (manual takes precedence), skipped", tostring(auraName), spellID)
                 elseif LearnAlreadyCovered(spellID, seen, auraName) then
                     log("%s (%d): already covered by preset/learned, skipped", tostring(auraName), spellID)
