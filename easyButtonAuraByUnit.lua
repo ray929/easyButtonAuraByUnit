@@ -1644,6 +1644,12 @@ local function RebuildGroups()
                         for id in pairs(barIDs) do actionSpellID = id; break end
                     end
                 end
+                -- 光环名 == 施放名时把该施放 ID 也纳入追踪集合（与手动绑定 CollectBindingAuraIDs
+                -- 同一层双保险）：Forever 里 debuff/buff 的 ID 通常就是该 Rank 的施放 ID，
+                -- 但名字索引没覆盖到它时（法术书读不到、动作条未建索引）只靠名字会漏掉整条。
+                if e.auraName and actionName == e.auraName and type(actionSpellID) == "number" then
+                    ids[actionSpellID] = true
+                end
                 local unit = e.unit or "player"
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
                 -- 一个 ID 都没展开到（还没学 / 名字对不上）→ 不建组：空组只会白占一个容器
@@ -1890,8 +1896,9 @@ function B.DumpGroupsVerbose()
         local auras = {}
         for id in pairs(p.auraIDs or {}) do auras[#auras + 1] = tostring(id) end
         table.sort(auras)
-        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s auras=[%s] container=%s btn=%s initFailed=%s"):format(
+        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s name=%s auras=[%s] container=%s btn=%s initFailed=%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
+            tostring(p.actionName or "-"),
             table.concat(auras, ","),
             p.container and (p._docked and "docked" or "shown") or "nil",
             p.button and p.button:GetName() or "nil",
@@ -1905,6 +1912,45 @@ function B.DumpGroupsVerbose()
     return out
 end
 
+-- 诊断（/babu presets）：逐条列出本职业可用预设的解析结果——
+--   ids  = 条目自带的数字 ID；nameIDs = 按 auraName 展开到的同名 ID（永恒靠这个跨 Rank）；
+--   bar  = 动作条上该名字当前 Rank 的 ID；btn = 按钮解析结果。
+-- 判读：nameIDs/bar 都是空 → 名字索引没建起来（法术书/动作条都读不到）；
+--       ids 与 nameIDs 都不含真实光环 ID，但 btn 有值 → 追踪集合漏该 ID（不是按钮问题）。
+function B.DumpPresetsVerbose()
+    local out = {}
+    local _, classToken = UnitClass("player")
+    local nameIndex = B.GetSpellNameIndex()
+    local function idList(t)
+        local list = {}
+        for id in pairs(t or {}) do list[#list + 1] = tostring(id) end
+        table.sort(list)
+        return table.concat(list, ",")
+    end
+    for key, e in ipairs(B.PRESET_DATA or {}) do
+        if not e.class or e.class == classToken then
+            local ids = {}
+            if type(e.auraSpellID) == "table" then
+                for _, id in ipairs(e.auraSpellID) do ids[id] = true end
+            elseif type(e.auraSpellID) == "number" then
+                ids[e.auraSpellID] = true
+            end
+            local actionName = e.actionName or B.GetSpellNamePlain(e.actionSpellID)
+            local btn = actionName and FindActionButtonForSpellName(actionName) or nil
+            out[#out + 1] = ("preset %d: class=%s aura=%s ids=[%s] nameIDs=[%s] action=%s bar=[%s] spellKnown=%s btn=%s on=%s"):format(
+                key, tostring(e.class or "*"), tostring(e.auraName or "-"),
+                idList(ids),
+                e.auraName and idList(nameIndex.byName[e.auraName]) or "",
+                tostring(actionName or "-"),
+                actionName and idList(nameIndex.bar[actionName]) or "",
+                tostring(IsPlayerSpell(e.actionSpellID)),
+                btn and btn:GetName() or "nil",
+                tostring(B.IsPresetEnabled(key)))
+        end
+    end
+    return out
+end
+
 SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
 SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
     msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
@@ -1914,6 +1960,13 @@ SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
             for _, line in ipairs(B.RunLearnScanVerbose()) do
                 print("|cffE8BC75[babu]|r " .. line)
             end
+        end
+        return
+    end
+    if msg == "presets" then
+        if InCombatLockdown() then return end
+        for _, line in ipairs(B.DumpPresetsVerbose()) do
+            print("|cffE8BC75[babu]|r " .. line)
         end
         return
     end
