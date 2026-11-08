@@ -853,15 +853,23 @@ local function HasHostileTarget()
     return not (okF and friendly and friendly ~= false)
 end
 
--- 内置预设是否覆盖某光环 ID（学习条目被预设收编时：运行时让位 + 扫描时清理旧条目）
-local function PresetCoversAura(auraID)
+-- 内置预设是否覆盖某光环（学习条目被预设收编时：运行时让位 + 扫描时清理旧条目）
+-- auraName 可选：传了才做名字比对——永恒（Forever）里同一技能各 Rank 的光环 ID 各不相同，
+-- 只有名字相同，按名字才算"同一个光环家族"。
+-- ⚠️ 扫描清理处（ScanLearnableAuras）故意【只传 ID】：名字一旦因本地化差异没命中，
+--    被删掉的学习条目就找不回来了；运行时让位不受影响 —— 宁可不清理，也不误删用户数据。
+local function PresetCoversAura(auraID, auraName)
     -- 只让位于「本职业、且未被用户禁用」的预设：预设关掉时学习条目应恢复显示，
     -- 否则会出现预设关了、学习条目又让位、光环彻底消失的空窗。
     local _, classToken = UnitClass("player")
     for i, e in ipairs(B.PRESET_DATA or {}) do
         if (not e.class or e.class == classToken)
             and B.IsPresetEnabled(i) then
-            if type(e.auraSpellID) == "table" then
+            if e.auraName then
+                -- 名字驱动条目【只按名字】收编：它带的数字 ID 只是某一级的旧值，跨 Rank 不可比；
+                -- 由此「扫描清理」不传名字时就永远不会碰这批条目（防名字打错 → 误删学习条目）
+                if auraName and e.auraName == auraName then return true end
+            elseif type(e.auraSpellID) == "table" then
                 for _, id in ipairs(e.auraSpellID) do
                     if id == auraID then return true end
                 end
@@ -888,7 +896,10 @@ local function LearnAlreadyCovered(auraID, seen, auraName)
         end
     end
     for _, e in ipairs(B.PRESET_DATA or {}) do
-        if type(e.auraSpellID) == "table" then
+        -- 名字驱动预设（永恒）：只按名字收编，数字 ID 只是某一级的旧值，跨 Rank 不可比
+        if e.auraName then
+            if auraName and e.auraName == auraName then return true end
+        elseif type(e.auraSpellID) == "table" then
             for _, id in ipairs(e.auraSpellID) do
                 if id == auraID then return true end
             end
@@ -1577,7 +1588,7 @@ local function RebuildGroups()
             local auraName = e.auraName or B.GetSpellNamePlain(e.auraID)
             if not e.disabled and e.auraID and e.actionSpellID
                 and not B.IsAuraManuallyBound(e.auraID, auraName)
-                and not PresetCoversAura(e.auraID) then
+                and not PresetCoversAura(e.auraID, auraName) then
                 local unit = e.unit or "player"
                 local filter = (unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER"
                 -- 学过一次也要跟着升到新 Rank：按名字展开光环 ID，施放技能换成条上
@@ -1601,6 +1612,9 @@ local function RebuildGroups()
 
     -- 内置预设：按当前职业过滤 + 逐条启停（key = PresetData.lua 中的序号；
     -- 不做专精过滤，启停存档按专精保存已够用）
+    -- 名字驱动（2026-11-08）：永恒（Forever）里同一技能每级是不同 spellID + 不同光环 ID，
+    -- 预设条目可写 auraName / actionName → 按名字展开成同名全部 ID，升 Rank 自动跟随
+    -- （学习条目早就这么做，这里补齐预设通道）。正式服条目不带这两个字段，行为与旧版一致。
     local _, classToken = UnitClass("player")
     for key, e in ipairs(B.PRESET_DATA or {}) do
         if (not e.class or e.class == classToken)
@@ -1612,12 +1626,29 @@ local function RebuildGroups()
                     enchantName = e.enchantName,
                 }
             else
-                local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
+                local ids = {}
+                if type(e.auraSpellID) == "table" then
+                    for _, id in ipairs(e.auraSpellID) do ids[id] = true end
+                elseif type(e.auraSpellID) == "number" then
+                    ids[e.auraSpellID] = true
+                end
+                if e.auraName then
+                    for id in pairs(nameIndex.byName[e.auraName] or {}) do ids[id] = true end
+                end
+                -- 施放技能优先取条上该名字的当前 Rank 的 ID（ResolveButton 走名字，两者配对）
+                local actionName = e.actionName or B.GetSpellNamePlain(e.actionSpellID)
+                local actionSpellID = e.actionSpellID
+                if actionName then
+                    local barIDs = nameIndex.bar[actionName]
+                    if barIDs then
+                        for id in pairs(barIDs) do actionSpellID = id; break end
+                    end
+                end
                 local unit = e.unit or "player"
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
-                local actionName = B.GetSpellNamePlain(e.actionSpellID)
-                for _, id in ipairs(ids) do
-                    addGroup(unit, filter, e.actionSpellID, actionName, { [id] = true }, e.overlayOnly)
+                -- 一个 ID 都没展开到（还没学 / 名字对不上）→ 不建组：空组只会白占一个容器
+                if next(ids) then
+                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly)
                 end
             end
         end

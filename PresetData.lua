@@ -1,7 +1,8 @@
 -- PresetData.lua
 -- Easy Button Aura by Unit — 内置预设数据
 --
--- 全量移植自上游 ActionbarEnhanced/PresetData.lua（SELF_BUFFS + PRESETS + 武器附魔）。
+-- 正式服（Mainline）表全量移植自上游 ActionbarEnhanced/PresetData.lua（SELF_BUFFS + PRESETS +
+-- 武器附魔）；永恒（非 Mainline）表由玩家存档观察得来，见下方永恒表的说明。
 -- 运行时按当前职业过滤（class = nil 的条目任何职业都生效，靠 IsPlayerSpell 自动筛选种族技能）；
 -- 每条预设可在配置窗口（/babu）的「预设」区逐条启用/禁用（专精级存档）。
 --
@@ -14,6 +15,8 @@
 --       专精归属多版本变迁容易写错，如爆炸射击现仅生存猎；启停存档按专精保存已够用）
 --     · unit/filter 可选：默认 player + HELPFUL；目标减益必须写 unit="target" +
 --       filter="HARMFUL|PLAYER"（|PLAYER=只追踪玩家自己施放的，2026-08-19 烈焰震击踩坑）
+--     · auraName / actionName 可选（2026-11-08 起）：写名字时按名字展开成同名全部 ID，
+--       跨 Rank 生效——永恒表必写，正式服表不写（ID 稳定，按 ID 直查更省一次索引查询）
 --   武器附魔预设：{ class = "SHAMAN", enchantID = 5400, actionSpellID = 318038, enchantName = "Flametongue" }
 --     · 走 C_PaperDollInfo.GetTemporaryEnchantmentInfo 战斗安全通道
 --       （独立覆盖层 + 1 秒 ticker；旧 API GetWeaponEnchantInfo 已 deprecated）
@@ -24,11 +27,51 @@
 local B = EasyButtonAuraByUnit
 if not B then return end
 
--- 预设仅限正式服（Retail）：永恒（Camelot）等客户端的法术/光环 ID 体系与正式服不一致，
--- 直接套用会错绑（用户 2026-10-09 指定：所有预设含复原都只在正式服启用，永恒的 ID 后续再挖掘）。
--- 非正式服时清空预设表 → 配置界面「预设」区为空、学习扫描的 preset 覆盖检查自然失效。
+-- 预设分两套客户端，绝不混用（两套客户端法术/光环 ID 体系不一致，互相套用必错绑）：
+--   · 正式服（Mainline）→ 下方「上游全量移植」表（ID 跨版本稳定，直接按 ID 查）
+--   · 永恒（Forever / Camelot，非 Mainline）→ 本文件末尾的永恒表
+--     ⚠️ 永恒里同一技能每级是【不同 spellID + 不同光环 ID，只有名字相同】，
+--        所以永恒表必须带 auraName / actionName，由主文件按名字展开成同名全部 ID。
+-- =========================================================
+-- 永恒（Forever / Camelot）预设
+-- =========================================================
+-- 来源（2026-11-08）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/*/SavedVariables/
+-- easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，收编 16 条：
+--   圣骑士（尸-太浓）8 条 / 牧师（爷爷-泡茶）7 条（含手动绑定的暗言术：痛）/ 兽人种族 1 条。
+-- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
+-- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
+-- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
+--    仅作名字解析失败时的兜底（详见主文件 RebuildGroups 的预设循环）。
+-- ⚠️ 新条目只能加在表尾：预设启停按 ipairs 序号存档（specs[specID].presets[key]），
+--    中途插入会让后续条目的禁用记录错位。
 if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
-    B.PRESET_DATA = {}
+    B.PRESET_DATA = {
+        -- 圣骑士 PALADIN（自增益；光环 ID 通常等于该等级技能 ID）
+        { class = "PALADIN", auraName = "正义圣印",   auraSpellID = 20154,   actionName = "正义圣印",   actionSpellID = 20154 },
+        { class = "PALADIN", auraName = "力量祝福",   auraSpellID = 19740,   actionName = "力量祝福",   actionSpellID = 19740 },
+        { class = "PALADIN", auraName = "十字军圣印", auraSpellID = 21082,   actionName = "十字军圣印", actionSpellID = 21082 },
+        { class = "PALADIN", auraName = "圣佑术",     auraSpellID = 498,     actionName = "圣佑术",     actionSpellID = 498 },
+        { class = "PALADIN", auraName = "正义之怒",   auraSpellID = 25780,   actionName = "正义之怒",   actionSpellID = 25780 },
+        -- 愤怒圣印：永恒自定义法术（ID 落在 1.3M 段，正式服无此 ID）
+        { class = "PALADIN", auraName = "愤怒圣印",   auraSpellID = 1311649, actionName = "愤怒圣印",   actionSpellID = 1311649 },
+        { class = "PALADIN", auraName = "保护祝福",   auraSpellID = 1022,    actionName = "保护祝福",   actionSpellID = 1022 },
+
+        -- 牧师 PRIEST
+        { class = "PRIEST", auraName = "真言术：韧", auraSpellID = 1243, actionName = "真言术：韧", actionSpellID = 1243 },
+        { class = "PRIEST", auraName = "真言术：盾", auraSpellID = 17,   actionName = "真言术：盾", actionSpellID = 17 },
+        { class = "PRIEST", auraName = "恢复",       auraSpellID = 139,  actionName = "恢复",       actionSpellID = 139 },
+        { class = "PRIEST", auraName = "渐隐术",     auraSpellID = 586,  actionName = "渐隐术",     actionSpellID = 586 },
+        { class = "PRIEST", auraName = "心灵之火",   auraSpellID = 588,  actionName = "心灵之火",   actionSpellID = 588 },
+        -- 暗言术：痛：挂在目标身上的我方减益。存档里这条是「手动绑定」（手动绑定会双路展开
+        -- player/target），预设必须显式写 target，否则键到玩家的增益通道上永远不命中。
+        { class = "PRIEST", auraName = "暗言术：痛", auraSpellID = 589, actionName = "暗言术：痛", actionSpellID = 589,
+          unit = "target", filter = "HARMFUL|PLAYER" },
+
+        -- 种族技能（不设 class：靠施放技能的 IsPlayerSpell 门禁自动筛选，只有对应种族生效）
+        { auraName = "血性狂暴", auraSpellID = 20572, actionName = "血性狂暴", actionSpellID = 20572 }, -- 兽人
+        { auraName = "感知",     auraSpellID = 20600, actionName = "感知",     actionSpellID = 20600 }, -- 人类
+        { auraName = "食尸",     auraSpellID = 20578, actionName = "食尸",     actionSpellID = 20577 }, -- 亡灵（光环 20578 = 进食增益，施放技能 20577）
+    }
     return
 end
 

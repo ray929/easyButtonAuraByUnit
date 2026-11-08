@@ -257,7 +257,9 @@ end
 -- 内置预设区（按当前职业过滤；复选框启停）
 -- =========================================================
 -- 预设光环名列表（auraSpellID 兼容数组）
+-- 名字驱动条目（永恒）直接给 auraName：那一级的旧 ID 现在多半已不存在，按 ID 反查会显示成数字
 local function PresetAuraNames(e)
+    if e.auraName then return { e.auraName } end
     local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
     local names = {}
     for _, id in ipairs(ids) do
@@ -268,7 +270,8 @@ end
 
 -- 预设行显示文本：光环名（数组取首个 + 计数）→ 技能名
 local function PresetDisplayText(e)
-    local spellName = B.GetSpellDisplayName(e.actionSpellID)
+    -- actionName 优先：永恒条目跨 Rank，存盘 ID 可能已失效
+    local spellName = e.actionName or B.GetSpellDisplayName(e.actionSpellID)
     if e.enchantID then
         -- 上游 enchantName 是英文硬编码；一律显示客户端本地化的技能名
         -- （GetSpellDisplayName 查询失败时返回数字字符串，此时才回退 enchantName）
@@ -277,11 +280,7 @@ local function PresetDisplayText(e)
         end
         return (e.enchantName or tostring(e.enchantID)) .. " → " .. spellName
     end
-    local ids = (type(e.auraSpellID) == "table") and e.auraSpellID or { e.auraSpellID }
-    local names = {}
-    for _, id in ipairs(ids) do
-        names[#names + 1] = B.GetSpellDisplayName(id)
-    end
+    local names = PresetAuraNames(e)
     if #names > 1 then
         return (names[1] or "?") .. " (+" .. (#names - 1) .. ") → " .. spellName
     end
@@ -289,7 +288,7 @@ local function PresetDisplayText(e)
 end
 
 local function PresetTooltipText(e)
-    local spellName = B.GetSpellDisplayName(e.actionSpellID)
+    local spellName = e.actionName or B.GetSpellDisplayName(e.actionSpellID)
     if e.enchantID then
         return B.GetSpellDisplayName(e.actionSpellID) ..
             (e.enchantID and (" (enchantID: " .. e.enchantID .. ")") or "")
