@@ -294,6 +294,10 @@ function B.SelectSpec(specID)
     specs[specID].list = specs[specID].list or {}
     specs[specID].presets = specs[specID].presets or {}
     specs[specID].learned = specs[specID].learned or {}
+    -- 名字 → 实扫到的光环 ID（专精级）：Forever 里「施放 ID ≠ 光环 ID」的技能
+    -- （牧师虚弱之触：施放/自身 buff 2652，打到怪身上的 debuff 2943）名字索引推不出来，
+    -- 只能靠脱战扫描读一次记下来，之后按名字展开时并入。见 B.RecordSeenAura。
+    specs[specID].auraSeen = specs[specID].auraSeen or {}
     -- 旧版迁移：learned 曾是角色级根表 → 整体搬进当前专精（条目按光环 ID 精确匹配，
     -- 混入其他专精的条目不会误触发，无需逐条甄别；该专精日后扫到会覆盖式补齐）
     if easyButtonAuraByUnitDB.learned then
@@ -318,6 +322,39 @@ function B.GetList()
     if B.db and B.db.list then return B.db.list end
     return {}
 end
+
+-- 名字 → 实扫到的光环 ID 集合（专精级；key = 客户端给的本地化光环名）
+function B.GetAuraSeen()
+    if B.db then
+        B.db.auraSeen = B.db.auraSeen or {}
+        return B.db.auraSeen
+    end
+    return {}
+end
+
+-- 记一条「按名字观测到的光环 ID」。
+-- 为什么需要：法术名索引（动作条可见按钮 ∪ 法术书）只能给出【施放技能】的 ID；而光环 ID
+-- 有时与施放 ID 不同（牧师虚弱之触：施放/自身 buff 2652，打到怪身上的 debuff 2943），
+-- 更高 Rank 又是另一批 ID、只有名字不变 → 这类光环只能靠脱战扫描实读一次记下来，
+-- 之后按名字展开时并入追踪集合，才能随 Rank 自动跟随。
+-- 上限 AURA_SEEN_MAX_NAMES 个名字，防长时间游玩无限膨胀（超出后只更新已有名字）。
+local AURA_SEEN_MAX_NAMES = 200
+local function RecordSeenAura(name, auraID)
+    if IsSecret(name) or IsSecret(auraID) then return end
+    if type(name) ~= "string" or name == "" then return end
+    if type(auraID) ~= "number" or auraID <= 0 then return end
+    local seen = B.GetAuraSeen()
+    local set = seen[name]
+    if not set then
+        local n = 0
+        for _ in pairs(seen) do n = n + 1 end
+        if n >= AURA_SEEN_MAX_NAMES then return end
+        set = {}
+        seen[name] = set
+    end
+    set[auraID] = true
+end
+B.RecordSeenAura = RecordSeenAura
 
 -- 该光环是否已被当前专精的手动绑定覆盖（手动 > 学习 优先级判据）。
 -- 名字也要比：Forever 里同一技能各等级的光环 ID 各不相同，只比 ID 会让"旧等级手动绑过、
@@ -671,6 +708,8 @@ local function CollectBindingAuraIDs(cfg, idx, actionSpellID, actionName)
     if cfg.auraID then set[cfg.auraID] = true end
     if auraName then
         for id in pairs(idx.byName[auraName] or {}) do set[id] = true end
+        -- 扫描记下的实际光环 ID（施放 ID ≠ 光环 ID 的技能，见 B.RecordSeenAura）
+        for id in pairs(B.GetAuraSeen()[auraName] or {}) do set[id] = true end
         if actionName == auraName and type(actionSpellID) == "number" then
             set[actionSpellID] = true
         end
@@ -1009,6 +1048,13 @@ local function ScanLearnableAuras(verbose)
                 local srcUnit = data.sourceUnit
                 -- 光环名（明文）：同样用于去重（各等级只学一次）与随后按名字展开各 Rank
                 local auraName = (type(data.name) == "string" and not IsSecret(data.name)) and data.name or nil
+
+                -- 先把「名字 → 实际光环 ID」记下来，且**不受下面任何门禁影响**：
+                -- 已被预设/手动绑定覆盖的光环同样要记，否则「施放 ID ≠ 光环 ID」的技能
+                -- （虚弱之触的敌方 debuff 2943）永远拿不到真身 ID，升 Rank 后必然失效。
+                if auraName and spellID and not IsSecret(spellID) then
+                    RecordSeenAura(auraName, spellID)
+                end
 
                 if not spellID or IsSecret(spellID) then
                     log("aura @%d: spellId missing/secret, skipped", index - 1)
@@ -1634,6 +1680,8 @@ local function RebuildGroups()
                 end
                 if e.auraName then
                     for id in pairs(nameIndex.byName[e.auraName] or {}) do ids[id] = true end
+                    -- 扫描记下的实际光环 ID（施放 ID ≠ 光环 ID 的技能，见 B.RecordSeenAura）
+                    for id in pairs(B.GetAuraSeen()[e.auraName] or {}) do ids[id] = true end
                 end
                 -- 施放技能优先取条上该名字的当前 Rank 的 ID（ResolveButton 走名字，两者配对）
                 local actionName = e.actionName or B.GetSpellNamePlain(e.actionSpellID)
@@ -1937,10 +1985,13 @@ function B.DumpPresetsVerbose()
             end
             local actionName = e.actionName or B.GetSpellNamePlain(e.actionSpellID)
             local btn = actionName and FindActionButtonForSpellName(actionName) or nil
-            out[#out + 1] = ("preset %d: class=%s aura=%s ids=[%s] nameIDs=[%s] action=%s bar=[%s] spellKnown=%s btn=%s on=%s"):format(
-                key, tostring(e.class or "*"), tostring(e.auraName or "-"),
+            local unit = e.unit or "player"
+            local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
+            out[#out + 1] = ("preset %d: class=%s unit=%s/%s aura=%s ids=[%s] nameIDs=[%s] seen=[%s] action=%s bar=[%s] spellKnown=%s btn=%s on=%s"):format(
+                key, tostring(e.class or "*"), unit, filter, tostring(e.auraName or "-"),
                 idList(ids),
                 e.auraName and idList(nameIndex.byName[e.auraName]) or "",
+                e.auraName and idList(B.GetAuraSeen()[e.auraName]) or "",
                 tostring(actionName or "-"),
                 actionName and idList(nameIndex.bar[actionName]) or "",
                 tostring(IsPlayerSpell(e.actionSpellID)),
