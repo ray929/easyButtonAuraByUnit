@@ -35,9 +35,10 @@ if not B then return end
 -- =========================================================
 -- 永恒（Forever / Camelot）预设
 -- =========================================================
--- 来源（2026-11-08）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/*/SavedVariables/
--- easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，收编 16 条：
---   圣骑士（尸-太浓）8 条 / 牧师（爷爷-泡茶）7 条（含手动绑定的暗言术：痛）/ 兽人种族 1 条。
+-- 来源（2026-11-08 起，持续收编）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/*/SavedVariables/
+-- easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，现共 17 条：
+--   圣骑士 7 条（尸-太浓）/ 牧师 7 条（爷爷-泡茶 6 条含手动暗言术：痛、爸爸-不会泡茶 1 条虚弱之触）/
+--   种族 3 条（血性狂暴·兽人、感知·人类、食尸·亡灵）。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -71,6 +72,14 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         { auraName = "血性狂暴", auraSpellID = 20572, actionName = "血性狂暴", actionSpellID = 20572 }, -- 兽人
         { auraName = "感知",     auraSpellID = 20600, actionName = "感知",     actionSpellID = 20600 }, -- 人类
         { auraName = "食尸",     auraSpellID = 20578, actionName = "食尸",     actionSpellID = 20577 }, -- 亡灵（光环 20578 = 进食增益，施放技能 20577）
+
+        -- 虚弱之触（牧师，2026-11-09 从角色「爸爸-不会泡茶」的手动绑定收编：
+        -- auraID 2943 / 施放 2652，两者同名但 ID 不同——这类「buff ID ≠ 施放 ID」的技能，
+        -- 名字索引只能给出施放 ID，故这里必须把观察到的光环 ID 也写进 auraSpellID。
+        -- ⚠️ 已知局限：更高 Rank 的 buff ID 若与施放 ID 不同，名字展开凑不出来 → 届时表现是
+        -- 勾着不显示；补法是让 /babu scan 记下实际光环 ID（该条目按名字收编会挡住学习）。
+        -- 条目必须加在表尾（启停按 ipairs 序号存档）。
+        { class = "PRIEST", auraName = "虚弱之触", auraSpellID = 2943, actionName = "虚弱之触", actionSpellID = 2652 },
     }
     return
 end
