@@ -2224,29 +2224,50 @@ function B.DumpTotemBar()
     local tf = _G.TotemFrame
     if tf then
         local okS, shown = pcall(tf.IsShown, tf)
-        out[#out + 1] = ("TotemFrame: shown=%s children=%d"):format(tostring(shown), select("#", tf:GetChildren()))
-        for i, child in ipairs({ tf:GetChildren() }) do
-            local okType, otype = pcall(child.GetObjectType, child)
-            local okSh, cshown = pcall(child.IsShown, child)
-            local tex
-            if child.Icon then
-                local okT, t = pcall(child.Icon.GetTexture, child.Icon)
-                if okT then tex = tostring(t) end
+        local okR, l, b, w, h = pcall(tf.GetRect, tf)
+        local okP, parent = pcall(tf.GetParent, tf)
+        out[#out + 1] = ("TotemFrame: shown=%s children=%d rect=%s,%s %sx%s parent=%s"):format(
+            tostring(shown), select("#", tf:GetChildren()),
+            tostring(okR and l), tostring(okR and b), tostring(okR and w), tostring(okR and h),
+            tostring(okP and parent and (parent:GetName() or parent:GetObjectType())))
+        -- 递归两层：图腾条真正的图标按钮不一定直接挂在 TotemFrame 下
+        local function dump(frame, depth, prefix)
+            for _, child in ipairs({ frame:GetChildren() }) do
+                local okType, otype = pcall(child.GetObjectType, child)
+                local okSh, cshown = pcall(child.IsShown, child)
+                local iconTex
+                if child.Icon then
+                    local okT, t = pcall(child.Icon.GetTexture, child.Icon)
+                    if okT then iconTex = tostring(t) end
+                end
+                -- 图标可能直接是按钮的子纹理（Ellesmere 的布局代码依赖 .Icon，但真实按钮未必有）
+                local texList = {}
+                if child.GetRegions then
+                    local okG, regions = pcall(child.GetRegions, child)
+                    if okG and type(regions) == "table" then
+                        for _, r in ipairs(regions) do
+                            if r.GetTexture then
+                                local okT, t = pcall(r.GetTexture, r)
+                                if okT and t then texList[#texList + 1] = tostring(t) end
+                            end
+                        end
+                    end
+                end
+                out[#out + 1] = ("%schild: name=%s type=%s shown=%s iconField=%s regions=[%s]"):format(
+                    prefix, tostring(child:GetName()), tostring(otype), tostring(cshown),
+                    tostring(iconTex), table.concat(texList, " "))
+                if depth > 1 then
+                    dump(child, depth - 1, prefix .. "  ")
+                end
             end
-            local id
-            if child.GetID then
-                local okI, v = pcall(child.GetID, child)
-                if okI then id = v end
-            end
-            out[#out + 1] = ("  child %d: name=%s type=%s id=%s shown=%s icon=%s"):format(
-                i, tostring(child:GetName()), tostring(otype), tostring(id),
-                tostring(cshown), tostring(tex))
         end
+        dump(tf, 2, "  ")
     else
         out[#out + 1] = "TotemFrame: 不存在"
     end
 
     -- GetTotemInfo(slot)：经典 API，返回 haveTotem, name, startTime, duration, icon
+    -- slot 顺序 = 火 1 / 土 2 / 水 3 / 空气 4（实测大地之力图腾落在 2）
     if type(GetTotemInfo) == "function" then
         for slot = 1, 4 do
             local ok, have, name, startTime, duration, icon = pcall(GetTotemInfo, slot)
@@ -2269,6 +2290,24 @@ function B.DumpTotemBar()
             out[#out + 1] = ("  spellIcon(%d)=%s"):format(id, ok and tostring(tex) or "error")
         end
     end
+
+    -- 另一条可能的「图腾条」：Call of the Elements（MultiCastActionButton1..12）
+    local mc = {}
+    for i = 1, 12 do
+        local btn = _G["MultiCastActionButton" .. i]
+        if btn then
+            local okSh, s = pcall(btn.IsShown, btn)
+            local t
+            if btn.Icon then
+                local okT, v = pcall(btn.Icon.GetTexture, btn.Icon)
+                if okT then t = tostring(v) end
+            end
+            if s or t then
+                mc[#mc + 1] = ("%d=%s%s"):format(i, s and "shown" or "hidden", t and ("/" .. t) or "")
+            end
+        end
+    end
+    out[#out + 1] = "MultiCastActionButton: " .. (#mc > 0 and table.concat(mc, " ") or "none")
 
     -- 玩家身上是否有对应 buff（脱战才扫；战斗中本命令本来就不响应）
     local seen = B.GetAuraSeen()
