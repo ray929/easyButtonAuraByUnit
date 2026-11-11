@@ -2241,9 +2241,11 @@ function B.DumpTotemBar()
                     if okT then iconTex = tostring(t) end
                 end
                 -- 图标可能直接是按钮的子纹理（Ellesmere 的布局代码依赖 .Icon，但真实按钮未必有）
+                -- ⚠️ GetRegions() 返回【变长参数】不是 table：必须用 {} 包起来，
+                --    直接 `local ok, r = pcall(f)` 只接住第一个 region，会永远判空。
                 local texList = {}
                 if child.GetRegions then
-                    local okG, regions = pcall(child.GetRegions, child)
+                    local okG, regions = pcall(function() return { child:GetRegions() } end)
                     if okG and type(regions) == "table" then
                         for _, r in ipairs(regions) do
                             if r.GetTexture then
@@ -2251,6 +2253,13 @@ function B.DumpTotemBar()
                                 if okT and t then texList[#texList + 1] = tostring(t) end
                             end
                         end
+                    end
+                end
+                -- Cooldown 的时间：备用的「按钮 ↔ 图腾槽」匹配手段（与 GetTotemInfo 的 start/dur 比对）
+                if otype == "Cooldown" then
+                    local okC, cs, cd = pcall(child.GetCooldownTimes, child)
+                    if okC then
+                        texList[#texList + 1] = ("cd=%s/%s"):format(tostring(cs), tostring(cd))
                     end
                 end
                 -- 位置：判断按钮是「固定槽位」还是「连续排列」
