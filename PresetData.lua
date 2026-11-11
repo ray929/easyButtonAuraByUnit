@@ -51,8 +51,9 @@ if not B then return end
 -- 精选部分来源（2026-11-08 起，持续收编）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/
 -- */SavedVariables/easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，
 -- 外加客户端实测（`/babu weapon`）：圣骑士 7 条（尸-太浓）/ 牧师 8 条（爷爷-泡茶 6 条含手动
--- 暗言术：痛；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 1 条（石化武器·武器灌注，
--- 走附魔通道）/ 种族 3 条（血性狂暴·兽人、感知·人类、食尸·亡灵）/ 各职业常驻增益 13 条。
+-- 暗言术：痛；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 2 条（石化武器、火舌武器，
+-- 都是武器灌注、走附魔通道）/ 种族 4 条（血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人）/
+-- 各职业常驻增益 13 条。合计 34 条精选 + 54 条导入 = 88 条。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -236,6 +237,14 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
         { race = "Dwarf", auraName = "石像形态", auraSpellID = { 65116, 20594 },
           actionName = "石像形态", actionSpellID = 20594 },
+
+        -- 火舌武器（萨满武器灌注，2026-11-11 实测）：施放 8023（火舌 1）→
+        -- enchantID = 5、enchantIconID = 135814，武器 tooltip 写作「火舌 1（60分钟）」。
+        -- 与石化武器同一条通道（item enchant / Imbue，不是 unit aura）。
+        -- 升 Rank 后 enchantID 会变 → 靠附魔图标 135814 兜底；图标若也跟着换，把新值补进来。
+        -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
+        { class = "SHAMAN", imbueName = "火舌武器", enchantIDs = { 5 }, imbueIcons = { 135814 },
+          actionName = "火舌武器", actionSpellID = 8023 },
     }
     return
 end
