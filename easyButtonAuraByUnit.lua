@@ -53,6 +53,20 @@ local LOCALES = {
         OPEN_OPTIONS      = "Open Options",
         STUB_HINT         = "Click the button below, or type /babu, to open the configuration window.",
         PRESET_HEADER     = "Built-in Presets",
+        -- 预设分组标题（PresetData 条目的 group 字段 → 显示名；未列出的组原样显示 key）
+        PRESET_GROUP_CORE       = "Essentials",
+        PRESET_GROUP_DEFENSIVES = "Defensives",
+        PRESET_GROUP_ACTIVEMITIGATION = "Active Mitigation",
+        PRESET_GROUP_RAIDCDS    = "Raid CDs",
+        PRESET_GROUP_EXTERNALS  = "Externals",
+        PRESET_GROUP_COREHEALS  = "Core Healing Buffs",
+        PRESET_GROUP_LESSERHEALS = "Lesser Healing Buffs",
+        PRESET_GROUP_SUPPORT    = "Support",
+        PRESET_GROUP_OFFENSIVE  = "Offensive CDs",
+        PRESET_GROUP_MOVEMENT   = "Movement",
+        PRESET_GROUP_UTILITY    = "Utility",
+        PRESET_GROUP_CONSUMABLES = "Consumables",
+        PRESET_OFF_HINT   = " (off by default)",
     },
     zhCN = {
         SPEC_LABEL        = "配置专精",
@@ -76,6 +90,20 @@ local LOCALES = {
         OPEN_OPTIONS      = "打开配置",
         STUB_HINT         = "点击按钮，或者输入 /babu 打开配置窗口。",
         PRESET_HEADER     = "内置预设",
+        -- 预设分组标题（PresetData 条目的 group 字段 → 显示名；未列出的组原样显示 key）
+        PRESET_GROUP_CORE       = "常用",
+        PRESET_GROUP_DEFENSIVES = "防御",
+        PRESET_GROUP_ACTIVEMITIGATION = "主动减伤",
+        PRESET_GROUP_RAIDCDS    = "团队冷却",
+        PRESET_GROUP_EXTERNALS  = "外部保命",
+        PRESET_GROUP_COREHEALS  = "核心治疗增益",
+        PRESET_GROUP_LESSERHEALS = "次级治疗增益",
+        PRESET_GROUP_SUPPORT    = "增益支援",
+        PRESET_GROUP_OFFENSIVE  = "爆发技能",
+        PRESET_GROUP_MOVEMENT   = "移动",
+        PRESET_GROUP_UTILITY    = "辅助",
+        PRESET_GROUP_CONSUMABLES = "消耗品",
+        PRESET_OFF_HINT   = "（默认不启用）",
     },
     zhTW = {
         SPEC_LABEL        = "配置專精",
@@ -99,6 +127,20 @@ local LOCALES = {
         OPEN_OPTIONS      = "開啟設定",
         STUB_HINT         = "點擊按鈕，或者輸入 /babu 開啟設定視窗。",
         PRESET_HEADER     = "內建預設",
+        -- 預設分組標題（PresetData 條目的 group 欄位 → 顯示名；未列出的組原樣顯示 key）
+        PRESET_GROUP_CORE       = "常用",
+        PRESET_GROUP_DEFENSIVES = "防禦",
+        PRESET_GROUP_ACTIVEMITIGATION = "主動減傷",
+        PRESET_GROUP_RAIDCDS    = "團隊冷卻",
+        PRESET_GROUP_EXTERNALS  = "外部保命",
+        PRESET_GROUP_COREHEALS  = "核心治療增益",
+        PRESET_GROUP_LESSERHEALS = "次級治療增益",
+        PRESET_GROUP_SUPPORT    = "增益支援",
+        PRESET_GROUP_OFFENSIVE  = "爆發技能",
+        PRESET_GROUP_MOVEMENT   = "移動",
+        PRESET_GROUP_UTILITY    = "輔助",
+        PRESET_GROUP_CONSUMABLES = "消耗品",
+        PRESET_OFF_HINT   = "（預設不啟用）",
     },
 }
 
@@ -407,12 +449,18 @@ function B.UpdateBinding(index, key, value)
 end
 
 -- =========================================================
--- 预设启停（专精级覆盖；只记禁用条目，缺省 = 启用）
+-- 预设启停（专精级覆盖；缺省 = 启用，条目可声明 defaultOff 改为缺省停用）
 -- =========================================================
+-- 2026-11-11 起预设表按 EllesmereUI_BuffPresets 全量导入，条目数从 ~120 涨到数百条，
+-- 其中「不常用 / 结构上大概率失效」（消耗品、物品触发的光环）一律标 defaultOff：
+-- 数据都在，但默认不建组、不接管学习条目，想试哪条再勾。
 function B.IsPresetEnabled(key)
     B.InitStorage()
     local db = easyButtonAuraByUnitDB.specs[B.currentSpecID or 0]
-    return not (db and db.presets and db.presets[key] == false)
+    local override = db and db.presets and db.presets[key]
+    if override ~= nil then return override ~= false end
+    local e = B.PRESET_DATA and B.PRESET_DATA[key]
+    return not (e and e.defaultOff)
 end
 
 function B.SetPresetEnabled(key, enabled)
@@ -420,12 +468,14 @@ function B.SetPresetEnabled(key, enabled)
     local db = easyButtonAuraByUnitDB.specs[B.currentSpecID or 0]
     if not db then return end
     db.presets = db.presets or {}
-    -- 启用 = 清除覆盖（回到缺省启用）；禁用 = 记 false。
+    -- 启用 = 清除覆盖（回到缺省）；禁用 = 记 false。
     -- 不写 true 值：预设表日后扩充/调整顺序时，旧的覆盖记录不会错位生效。
+    -- ⚠️ 例外：defaultOff 条目的缺省是「关」，勾选必须显式记 true，否则清掉覆盖又回到关闭。
     -- ⚠️ 不能写 `enabled and nil or false`：Lua 里 (true and nil) = nil，nil or false = false，
     -- 勾选也会存成 false → 取消后永远无法重新勾上（2026-10-09 用户实测踩坑）。
+    local e = B.PRESET_DATA and B.PRESET_DATA[key]
     if enabled then
-        db.presets[key] = nil
+        db.presets[key] = (e and e.defaultOff) and true or nil
     else
         db.presets[key] = false
     end

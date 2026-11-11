@@ -26,6 +26,7 @@ local PANEL_W = 680
 local ROW_W   = PANEL_W - 44
 local ROW_H   = 30        -- 手动绑定行：单行紧凑
 local PRESET_ROW_H = 28   -- 预设行
+local PRESET_GROUP_H = 22 -- 预设分组标题行（按 Ellesmere 的 filter 分组，几百条平铺没法用）
 local LEARN_ROW_H  = 28   -- 自动学习行
 
 local VISIBLE_ROWS = 12
@@ -296,22 +297,61 @@ end
 
 local function PresetTooltipText(e)
     local spellName = e.actionName or B.GetSpellDisplayName(e.actionSpellID)
+    -- defaultOff 条目（消耗品等大概率无效的导入数据）标注清楚，免得用户误以为「勾了不生效」
+    local offHint = e.defaultOff and L("PRESET_OFF_HINT") or ""
     if e.imbueName then
         -- 灌注：提示里点明它走武器附魔通道，免得用户以为光环那边漏了
-        return spellName .. " (imbue / weapon enchant)"
+        return spellName .. " (imbue / weapon enchant)" .. offHint
     end
     if e.enchantID then
         return B.GetSpellDisplayName(e.actionSpellID) ..
-            (e.enchantID and (" (enchantID: " .. e.enchantID .. ")") or "")
+            (e.enchantID and (" (enchantID: " .. e.enchantID .. ")") or "") .. offHint
     end
     local names = PresetAuraNames(e)
-    return table.concat(names, ", ") .. " → " .. spellName
+    return table.concat(names, ", ") .. " → " .. spellName .. offHint
+end
+
+-- 分组键归一化：无 group 的条目归「常用」组。
+-- ⚠️ 不能直接拿 nil 当表键——Lua 里 `t[nil] = 1` 会抛 "table index is nil"，
+--    配置窗口会当场打不开（2026-11-11 加分组时踩到）。
+local CORE_GROUP = "(core)"
+local function GroupKey(e) return e.group or CORE_GROUP end
+
+-- 预设分组标题：GroupLabel 查本地化表，未登记的组原样显示 key（永不报错）
+local function PresetGroupLabel(key)
+    if not key or key == CORE_GROUP then return L("PRESET_GROUP_CORE") end
+    local lk = "PRESET_GROUP_" .. string.upper(key)
+    return L(lk) or key
+end
+
+local function CreatePresetGroupRow(text)
+    local row = CreateFrame("Frame", nil, configFrame.rows)
+    row:SetSize(ROW_W, PRESET_GROUP_H)
+    row.isHeader = true
+    row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.text:SetPoint("BOTTOMLEFT", 6, 3)
+    row.text:SetText("|cff9a9a9a" .. text .. "|r")
+    return row
 end
 
 local function CreatePresetRows()
     local list = B.GetClassPresetList()
+    -- 组内条目数（标题上标注，方便判断这一组值不值得展开看）
+    local counts = {}
+    for _, item in ipairs(list) do
+        local g = GroupKey(item.e)
+        counts[g] = (counts[g] or 0) + 1
+    end
+    local lastGroup, groupSeen = nil, false
     for i, item in ipairs(list) do
         local e = item.e
+        local g = GroupKey(e)
+        -- 分组标题：GetClassPresetList 按表内序号返回，同一 group 连续出现（PresetData 保证）
+        if not groupSeen or g ~= lastGroup then
+            local label = PresetGroupLabel(g)
+            presetRows[#presetRows + 1] = CreatePresetGroupRow(label .. " (" .. (counts[g] or 0) .. ")")
+            lastGroup, groupSeen = g, true
+        end
         local row = CreateFrame("Frame", nil, configFrame.rows)
         row:SetSize(ROW_W, PRESET_ROW_H)
         row.key = item.key
@@ -433,10 +473,13 @@ local function LayoutScrollContent(count)
     local ph = dy2 + 14
     configFrame.presetHeader:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 8, -ph)
     local py2 = ph + 26
-    for i, pr in ipairs(presetRows) do
-        pr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -(py2 + (i - 1) * PRESET_ROW_H))
+    -- 预设区含分组标题行：逐行累加高度（标题行矮、条目行高）
+    local py = py2
+    for _, pr in ipairs(presetRows) do
+        pr:SetPoint("TOPLEFT", configFrame.rows, "TOPLEFT", 4, -py)
+        py = py + (pr.isHeader and PRESET_GROUP_H or PRESET_ROW_H)
     end
-    return py2 + #presetRows * PRESET_ROW_H + 8
+    return py + 8
 end
 
 local function DoRefresh()
@@ -493,9 +536,11 @@ local function DoRefresh()
         learnedRows[i]:Hide()
     end
 
-    -- 内置预设复选框状态（随专精切换刷新）
+    -- 内置预设复选框状态（随专精切换刷新；分组标题行没有 check，跳过）
     for _, pr in ipairs(presetRows) do
-        pr.check:SetChecked(B.IsPresetEnabled(pr.key))
+        if pr.check then
+            pr.check:SetChecked(B.IsPresetEnabled(pr.key))
+        end
     end
 
     local totalH = LayoutScrollContent(count)
