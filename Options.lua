@@ -283,6 +283,11 @@ local function PresetDisplayText(e)
         return (e.enchantName or tostring(e.enchantID)) .. " → " .. spellName
     end
     local names = PresetAuraNames(e)
+    -- 光环名与施放技能同名（自身/团队增益的绝大多数，如 野性印记、战斗怒吼）：
+    -- 行上只显示一次名字，别写成「野性印记 (+16) → 野性印记」；完整 ID 列表在 tooltip 里
+    if names[1] and spellName and names[1] == spellName then
+        return spellName
+    end
     if #names > 1 then
         return (names[1] or "?") .. " (+" .. (#names - 1) .. ") → " .. spellName
     end

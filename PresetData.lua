@@ -98,6 +98,34 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         -- 施放技能按名字解析到条上当前 Rank（actionName 驱动），按钮定位不受 Rank 影响。
         { class = "SHAMAN", imbueName = "石化武器", enchantIDs = { 29 }, imbueIcons = { 136086 },
           actionName = "石化武器", actionSpellID = 8017 },
+
+        -- ===== 各职业常驻增益（2026-11-11；数据来自本客户端自带插件的 Forever 表：
+        --       EllesmereUI/EllesmereUI_BuffPresets.lua 的 FOREVER_BUFF_FAMILIES，
+        --       与 EllesmereUIAuraBuffReminders 的 EABR.FvClassBuffs）=====
+        -- 全部写成【ID 数组】：那些表给的就是「能给该增益的全部法术 ID」（各 Rank + 群体版 +
+        -- NPC/物品副本），数组任一命中即显示 → 天然跨 Rank，而且**不需要写中文字名**：
+        -- 按钮定位靠 actionSpellID 在运行时反查名字，名字不用进表。
+        -- ⚠️ 未在客户端逐条实测：若某条在本客户端根本不产生光环，表现是「勾着不显示」。
+        -- ⚠️ 只能加在表尾（启停按 ipairs 序号存档）。
+        { class = "DRUID", auraSpellID = { 1126, 5232, 5234, 5286, 5287, 6756, 8907, 8908, 9884, 9885,
+            16878, 24752, 364163, 1291335, 1310503, 21849, 21850 }, actionSpellID = 1126 },                 -- 野性印记
+        { class = "DRUID", auraSpellID = { 467, 782, 1075, 8914, 9756, 9910, 15438, 16877, 21335, 21337,
+            22128, 22351, 22696, 25640, 25777, 438294, 438326, 1213813, 1213816, 1213834, 1236308,
+            1291338, 1312955 }, actionSpellID = 467 },                                                      -- 荆棘术
+        { class = "MAGE", auraSpellID = { 1459, 1460, 1461, 10156, 10157, 13326, 16876, 364161, 23028 },
+          actionSpellID = 1459 },                                                                           -- 奥术智慧
+        { class = "MAGE", auraSpellID = { 168, 7300, 7301 }, actionSpellID = 168 },                         -- 冰甲术
+        { class = "MAGE", auraSpellID = { 7302, 7320, 10219, 10220 }, actionSpellID = 7302 },               -- 冰霜护甲
+        { class = "MAGE", auraSpellID = { 6117, 22782, 22783 }, actionSpellID = 6117 },                     -- 魔甲术
+        { class = "PALADIN", auraSpellID = { 19742, 19850, 19852, 19853, 19854, 25290, 25894, 25918 },
+          actionSpellID = 19742 },                                                                          -- 智慧祝福
+        { class = "PALADIN", auraSpellID = { 20217, 1213408, 25898 }, actionSpellID = 20217 },              -- 王者祝福
+        { class = "PALADIN", auraSpellID = { 1038, 1912, 25895 }, actionSpellID = 1038 },                   -- 拯救祝福
+        { class = "PRIEST", auraSpellID = { 15473 }, actionSpellID = 15473, overlayOnly = true },           -- 暗影形态（无持续时间，仅遮罩）
+        { class = "SHAMAN", auraSpellID = { 324, 325, 905, 945, 8134, 10431, 10432 }, actionSpellID = 324 }, -- 闪电之盾
+        { class = "WARLOCK", auraSpellID = { 687, 696, 706, 1086, 11733, 11734, 11735 }, actionSpellID = 687 }, -- 魔甲术
+        { class = "WARRIOR", auraSpellID = { 6673, 5242, 6192, 11549, 11550, 11551, 25289, 9128, 24438,
+            25101, 26043, 26099, 27578 }, actionSpellID = 6673 },                                           -- 战斗怒吼
     }
     return
 end
