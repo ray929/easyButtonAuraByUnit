@@ -265,13 +265,17 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         -- ⚠️ `onTotemBar = true`：把标记挂到【图腾条】上，不是动作条上的图腾技能按钮。
         --    实现见主文件 FindTotemButtonForSpell——图腾条按钮匿名、无 ID、无 .Icon 字段，
         --    只能靠「按钮子树里的图文纹理 == 施放技能图标」认出来（实测 8075 的 136023 就在里面）。
-        -- ⚠️ `overlayOnly = true`：图腾 buff 没有持续时间，只做「存在标记」（绿色柔光），
+        -- ⚠️ `overlayOnly = true`：图腾 buff 没有持续时间，只做「存在标记」，
         --    不挂倒计时框与层数。图腾本身的倒计时由客户端图腾条自己显示，我们不重复。
+        -- ⚠️ `markStyle = "border"`：标记画成**绿色四边描边**而不是柔光。图腾条按钮本身就是
+        --    图腾图标，柔光会把整个图标染绿、与图标本体糊在一起；描边只框住边缘，清楚得多。
         -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
         { class = "SHAMAN", auraName = "大地之力", auraSpellID = 8076,
-          actionName = "大地之力图腾", actionSpellID = 8075, onTotemBar = true, overlayOnly = true },
+          actionName = "大地之力图腾", actionSpellID = 8075,
+          onTotemBar = true, overlayOnly = true, markStyle = "border" },
         { class = "SHAMAN", auraName = "石肤术", auraSpellID = 8072,
-          actionName = "石肤图腾", actionSpellID = 8071, onTotemBar = true, overlayOnly = true },
+          actionName = "石肤图腾", actionSpellID = 8071,
+          onTotemBar = true, overlayOnly = true, markStyle = "border" },
 
         -- 目标减益（2026-11-11 补收编：上一轮漏了烈焰震击，顺带发现神圣之火同样没收录）
         -- 两条都来自角色手动绑定（list），光环名 == 施放名，挂在【敌对目标】身上：

@@ -166,6 +166,8 @@ B.Style = {
     GLOW_SELF        = { 0.00, 0.70, 0.00 },                    -- 柔光（自身）：绿（CDMButtonAuras 同款）
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
     GLOW_ALPHA       = 0.5,
+    -- 边框标记（markStyle="border"）：四边描边的粗细（像素，UI 单位）
+    MARK_BORDER_THICKNESS = 2,
 }
 
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
@@ -1342,12 +1344,42 @@ local function SetupAuraButton(p, btn)
     btn:SetAllPoints(p.container)
     if p.overlayOnly then
         -- 无持续时间光环（形态/瞬发开关）：不挂倒计时框与层数。
-        -- 存在标记与其他光环完全一致——CDMButtonAuras 同款柔光材质（ADD 混合，自身=绿）。
+        -- 标记样式由 p.markStyle 决定：
+        --   · 默认 = CDMButtonAuras 同款柔光（ADD 混合，自身绿 / 敌对红）；
+        --   · "border" = 四边纯色描边（Interface\\Buttons\\WHITE8X8 拉开成四条边）。
+        --     适用场景：图标本身是主体（图腾条按钮就是图腾图标），柔光会把整个图标染绿、
+        --     和图标本体混在一起；边框只框边，既清楚又不遮内容。
+        local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
+        if p.markStyle == "border" then
+            local th = B.Style.MARK_BORDER_THICKNESS
+            local TEX = "Interface\\Buttons\\WHITE8X8"
+            -- { 纹理锚点, 按钮锚点, 纹理锚点2, 按钮锚点2, 宽, 高 }
+            -- 两条锚点把纹理拉满整条边，另一个尺寸手动给定。
+            local edges = {
+                { "TOPLEFT", "TOPRIGHT", nil, th },        -- 上
+                { "BOTTOMLEFT", "BOTTOMRIGHT", nil, th },  -- 下
+                { "TOPLEFT", "BOTTOMLEFT", th, nil },      -- 左
+                { "TOPRIGHT", "BOTTOMRIGHT", th, nil },    -- 右
+            }
+            local list = {}
+            for _, e in ipairs(edges) do
+                local t = btn:CreateTexture(nil, "OVERLAY")
+                t:SetTexture(TEX)
+                t:SetVertexColor(c[1], c[2], c[3], 1)
+                t:SetPoint(e[1], btn, e[1], 0, 0)
+                t:SetPoint(e[2], btn, e[2], 0, 0)
+                if e[4] then t:SetHeight(e[4]) end
+                if e[3] then t:SetWidth(e[3]) end
+                list[#list + 1] = t
+            end
+            p.borderTex = list
+            p.auraButton = btn
+            return
+        end
         local glow = btn:CreateTexture(nil, "ARTWORK")
         glow:SetAllPoints(btn)
         glow:SetTexture(B.OVERLAY_TEXTURE)
         glow:SetBlendMode("ADD")
-        local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
         glow:SetVertexColor(c[1], c[2], c[3], B.Style.GLOW_ALPHA)
         p.glow = glow
         p.auraButton = btn
@@ -1758,7 +1790,7 @@ local function RebuildGroups()
     -- key 以【技能名】为基准（而非 spellID）：Forever 升级换 Rank 后施放技能的 spellID 变了，
     -- 用名字才能复用同一个容器（否则每升一级就多一个停泊屏幕外的旧容器）。
     -- auraIDs 是集合：一条绑定可以同时追踪同名技能的各等级光环 ID。
-    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly, onTotemBar)
+    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly, onTotemBar, markStyle)
         local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionName or actionSpellID)
         local g = merged[key]
         if not g then
@@ -1774,6 +1806,7 @@ local function RebuildGroups()
             g.unit, g.filter, g.actionSpellID = unit, filter, actionSpellID
             g.actionName = actionName
             g.onTotemBar = onTotemBar or nil   -- 每轮重建覆盖，旧组复用时不残留
+            g.markStyle = markStyle or nil     -- 同上："border" = 四边描边，nil = 柔光
             merged[key] = g
             order[#order + 1] = g
         end
@@ -1896,7 +1929,7 @@ local function RebuildGroups()
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
                 -- 一个 ID 都没展开到（还没学 / 名字对不上）→ 不建组：空组只会白占一个容器
                 if next(ids) then
-                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, e.onTotemBar)
+                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, e.onTotemBar, e.markStyle)
                 end
             end
         end
