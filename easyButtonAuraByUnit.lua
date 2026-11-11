@@ -2002,6 +2002,84 @@ function B.DumpPresetsVerbose()
     return out
 end
 
+-- 诊断（/babu weapon）：把双武器上的附魔/灌注信息四种来源全倒出来，用来判定「石化武器」这类
+-- 灌注（imbue）到底走哪条通道、能不能按名字认出来：
+--   ① legacy GetWeaponEnchantInfo 元组（只有 enchantID，没有法术 ID）
+--   ② C_PaperDollInfo.GetTemporaryEnchantmentInfo 逐槽（enchantID / remainingTimeMs）
+--   ③ C_Item.GetWeaponEnchantInfo 列表（字段名原样倒，不预设）
+--   ④ 背包槽物品 tooltip 行（若客户端把灌注名写进 tooltip，那是唯一「按名字」的可靠来源）
+-- 用法：把要看的武器附魔挂上，脱战，输入 /babu weapon。
+function B.DumpWeaponEnchants()
+    local out = {}
+    local shown = 0
+    local function add(s)
+        shown = shown + 1
+        if shown <= 60 then out[#out + 1] = s end
+    end
+
+    if GetWeaponEnchantInfo then
+        local ok, a, b, c, d, e, f, g, h = pcall(GetWeaponEnchantInfo)
+        if ok then
+            add(("legacy: mh=%s/%s/%s/%s oh=%s/%s/%s/%s"):format(
+                tostring(a), tostring(b), tostring(c), tostring(d),
+                tostring(e), tostring(f), tostring(g), tostring(h)))
+        else
+            add("legacy: error")
+        end
+    else
+        add("legacy: API missing")
+    end
+
+    for _, slot in ipairs({ 16, 17 }) do
+        local ok, info = pcall(C_PaperDollInfo.GetTemporaryEnchantmentInfo, slot)
+        if ok and type(info) == "table" then
+            local function s(v) if IsSecret(v) then return "<secret>" end return tostring(v) end
+            add(("slot %d: enchantID=%s leftMs=%s charges=%s hasExp=%s"):format(
+                slot, s(info.enchantID), s(info.remainingTimeMs),
+                s(info.chargesRemaining), s(info.hasExpirationTime)))
+        else
+            add(("slot %d: %s"):format(slot, ok and "nil" or "error"))
+        end
+    end
+
+    if C_Item and C_Item.GetWeaponEnchantInfo and Enum and Enum.WeaponSlot then
+        for _, ws in ipairs({ Enum.WeaponSlot.MainHand, Enum.WeaponSlot.OffHand }) do
+            local ok, list = pcall(C_Item.GetWeaponEnchantInfo, ws)
+            if ok and type(list) == "table" then
+                for i = 1, #list do
+                    local e = list[i]
+                    local parts = {}
+                    if type(e) == "table" then
+                        for k, v in pairs(e) do
+                            if not IsSecret(v) then parts[#parts + 1] = tostring(k) .. "=" .. tostring(v) end
+                        end
+                    end
+                    add(("list ws=%s #%d: %s"):format(tostring(ws), i, table.concat(parts, " ")))
+                end
+            else
+                add(("list ws=%s: %s"):format(tostring(ws), ok and "nil" or "error"))
+            end
+        end
+    end
+
+    if C_TooltipInfo and C_TooltipInfo.GetInventoryItem then
+        for _, slot in ipairs({ 16, 17 }) do
+            local ok, data = pcall(C_TooltipInfo.GetInventoryItem, "player", slot)
+            if ok and type(data) == "table" and type(data.lines) == "table" then
+                for i, line in ipairs(data.lines) do
+                    local txt = line.leftText
+                    if type(txt) == "string" and not IsSecret(txt) then
+                        add(("tooltip %d #%d: %s"):format(slot, i, txt))
+                    end
+                end
+            else
+                add(("tooltip %d: %s"):format(slot, ok and "nil" or "error"))
+            end
+        end
+    end
+    return out
+end
+
 SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
 SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
     msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
@@ -2011,6 +2089,13 @@ SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
             for _, line in ipairs(B.RunLearnScanVerbose()) do
                 print("|cffE8BC75[babu]|r " .. line)
             end
+        end
+        return
+    end
+    if msg == "weapon" then
+        if InCombatLockdown() then return end
+        for _, line in ipairs(B.DumpWeaponEnchants()) do
+            print("|cffE8BC75[babu]|r " .. line)
         end
         return
     end
