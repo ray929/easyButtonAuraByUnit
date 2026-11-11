@@ -51,10 +51,11 @@ if not B then return end
 -- 精选部分来源（2026-11-08 起，持续收编）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/
 -- */SavedVariables/easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，
 -- 外加客户端实测（`/babu weapon`）：圣骑士 7 条（尸-太浓）/ 牧师 8 条（爷爷-泡茶 6 条含手动
--- 暗言术：痛；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 4 条（石化武器、火舌武器，
--- 都是武器灌注、走附魔通道；大地之力图腾、石肤图腾，buff 名与施放名不同）/ 种族 4 条
+-- 暗言术：痛 + 神圣之火·目标减益；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段、
+-- 1 条神圣之火）/ 萨满 5 条（石化武器、火舌武器，都是武器灌注、走附魔通道；大地之力图腾、
+-- 石肤图腾，buff 名与施放名不同；烈焰震击·目标减益）/ 种族 4 条
 -- （血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人）/ 各职业常驻增益 13 条。
--- 合计 36 条精选 + 54 条导入 = 90 条。
+-- 合计 38 条精选 + 54 条导入 = 92 条。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -262,6 +263,15 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
           actionName = "大地之力图腾", actionSpellID = 8075 },
         { class = "SHAMAN", auraName = "石肤术", auraSpellID = 8072,
           actionName = "石肤图腾", actionSpellID = 8071 },
+
+        -- 目标减益（2026-11-11 补收编：上一轮漏了烈焰震击，顺带发现神圣之火同样没收录）
+        -- 两条都来自角色手动绑定（list），光环名 == 施放名，挂在【敌对目标】身上：
+        -- 必须写 unit="target" + filter="HARMFUL|PLAYER"，缺 unit 会去玩家增益通道等，永远不命中。
+        -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
+        { class = "SHAMAN", auraName = "烈焰震击", auraSpellID = 8050,
+          actionName = "烈焰震击", actionSpellID = 8050, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "PRIEST", auraName = "神圣之火", auraSpellID = 14914,
+          actionName = "神圣之火", actionSpellID = 14914, unit = "target", filter = "HARMFUL|PLAYER" },
     }
     return
 end
