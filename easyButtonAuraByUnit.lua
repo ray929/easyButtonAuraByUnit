@@ -2230,7 +2230,7 @@ function B.DumpTotemBar()
             tostring(shown), select("#", tf:GetChildren()),
             tostring(okR and l), tostring(okR and b), tostring(okR and w), tostring(okR and h),
             tostring(okP and parent and (parent:GetName() or parent:GetObjectType())))
-        -- 递归两层：图腾条真正的图标按钮不一定直接挂在 TotemFrame 下
+        -- 递归四层：图腾条真正的图标按钮不一定直接挂在 TotemFrame 下
         local function dump(frame, depth, prefix)
             for _, child in ipairs({ frame:GetChildren() }) do
                 local okType, otype = pcall(child.GetObjectType, child)
@@ -2253,15 +2253,36 @@ function B.DumpTotemBar()
                         end
                     end
                 end
-                out[#out + 1] = ("%schild: name=%s type=%s shown=%s iconField=%s regions=[%s]"):format(
+                -- 位置：判断按钮是「固定槽位」还是「连续排列」
+                local okR, l, b, w, h = pcall(child.GetRect, child)
+                out[#out + 1] = ("%schild: name=%s type=%s shown=%s rect=%s,%s %sx%s iconField=%s regions=[%s]"):format(
                     prefix, tostring(child:GetName()), tostring(otype), tostring(cshown),
+                    tostring(okR and l), tostring(okR and b), tostring(okR and w), tostring(okR and h),
                     tostring(iconTex), table.concat(texList, " "))
+                -- mixin 可能暴露槽位/法术：frame 是 userdata，只能从 metatable.__index 表里找
+                if child.GetObjectType and otype == "Button" and depth == 2 then
+                    local okM, mt = pcall(getmetatable, child)
+                    local keys = {}
+                    if okM and type(mt) == "table" then
+                        for _, k in ipairs({ "__index", "mixin", "__typename" }) do
+                            keys[#keys + 1] = k .. "=" .. tostring(mt[k])
+                        end
+                        local idx = mt.__index
+                        if type(idx) == "table" then
+                            local names = {}
+                            for k in pairs(idx) do names[#names + 1] = tostring(k) end
+                            table.sort(names)
+                            keys[#keys + 1] = "indexKeys=[" .. table.concat(names, ",") .. "]"
+                        end
+                    end
+                    out[#out + 1] = prefix .. "  mt: " .. table.concat(keys, " ")
+                end
                 if depth > 1 then
                     dump(child, depth - 1, prefix .. "  ")
                 end
             end
         end
-        dump(tf, 2, "  ")
+        dump(tf, 4, "  ")
     else
         out[#out + 1] = "TotemFrame: 不存在"
     end
