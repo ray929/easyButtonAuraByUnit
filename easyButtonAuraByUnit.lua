@@ -2210,6 +2210,82 @@ function B.DumpWeaponEnchants()
     return out
 end
 
+-- =========================================================
+-- 图腾条诊断（/babu totem）
+-- =========================================================
+-- 目的：让图腾 buff（大地之力 8076 / 石肤术 8072）的「在范围内」标记挂到图腾条的
+-- 对应按钮上，而不是动作条技能按钮。可行性取决于两件事，都得实测：
+--   ① TotemFrame 的子按钮结构（按钮名 / 是否有 .Icon / 是否随图腾显隐）
+--   ② 按钮的图标或名字能否与「施放那个图腾的法术」对上（本命令把两边图标一起打出来比对）
+-- 判定原理（不依赖任何未知 API）：玩家身上有该图腾的 buff = 处于覆盖范围内；
+-- 图腾 buff 没有持续时间，所以这个通道只需要「有 / 无」，不读任何时长。
+function B.DumpTotemBar()
+    local out = {}
+    local tf = _G.TotemFrame
+    if tf then
+        local okS, shown = pcall(tf.IsShown, tf)
+        out[#out + 1] = ("TotemFrame: shown=%s children=%d"):format(tostring(shown), select("#", tf:GetChildren()))
+        for i, child in ipairs({ tf:GetChildren() }) do
+            local okType, otype = pcall(child.GetObjectType, child)
+            local okSh, cshown = pcall(child.IsShown, child)
+            local tex
+            if child.Icon then
+                local okT, t = pcall(child.Icon.GetTexture, child.Icon)
+                if okT then tex = tostring(t) end
+            end
+            local id
+            if child.GetID then
+                local okI, v = pcall(child.GetID, child)
+                if okI then id = v end
+            end
+            out[#out + 1] = ("  child %d: name=%s type=%s id=%s shown=%s icon=%s"):format(
+                i, tostring(child:GetName()), tostring(otype), tostring(id),
+                tostring(cshown), tostring(tex))
+        end
+    else
+        out[#out + 1] = "TotemFrame: 不存在"
+    end
+
+    -- GetTotemInfo(slot)：经典 API，返回 haveTotem, name, startTime, duration, icon
+    if type(GetTotemInfo) == "function" then
+        for slot = 1, 4 do
+            local ok, have, name, startTime, duration, icon = pcall(GetTotemInfo, slot)
+            if ok then
+                out[#out + 1] = ("  GetTotemInfo(%d): have=%s name=%s start=%s dur=%s icon=%s"):format(
+                    slot, tostring(have), tostring(name), tostring(startTime),
+                    tostring(duration), tostring(icon))
+            else
+                out[#out + 1] = ("  GetTotemInfo(%d): error %s"):format(slot, tostring(have))
+            end
+        end
+    else
+        out[#out + 1] = "GetTotemInfo: 不存在"
+    end
+
+    -- 施放技能的图标：与上面 child 的 icon 比对，相同就说明「能按图标认出是哪个图腾」
+    if C_Spell and C_Spell.GetSpellTexture then
+        for _, id in ipairs({ 8075, 8071 }) do   -- 大地之力图腾 / 石肤图腾
+            local ok, tex = pcall(C_Spell.GetSpellTexture, id)
+            out[#out + 1] = ("  spellIcon(%d)=%s"):format(id, ok and tostring(tex) or "error")
+        end
+    end
+
+    -- 玩家身上是否有对应 buff（脱战才扫；战斗中本命令本来就不响应）
+    local seen = B.GetAuraSeen()
+    out[#out + 1] = ("  auraSeen 大地之力=[%s] 石肤术=[%s]"):format(
+        (function()
+            local ids = {}
+            for id in pairs(seen["大地之力"] or {}) do ids[#ids + 1] = tostring(id) end
+            return table.concat(ids, ",")
+        end)(),
+        (function()
+            local ids = {}
+            for id in pairs(seen["石肤术"] or {}) do ids[#ids + 1] = tostring(id) end
+            return table.concat(ids, ",")
+        end)())
+    return out
+end
+
 SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
 SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
     msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
@@ -2240,6 +2316,13 @@ SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
         if InCombatLockdown() then return end
         RebuildGroups()   -- 先重建一遍，转储的就是当前真实状态
         for _, line in ipairs(B.DumpGroupsVerbose()) do
+            print("|cffE8BC75[babu]|r " .. line)
+        end
+        return
+    end
+    if msg == "totem" then
+        if InCombatLockdown() then return end
+        for _, line in ipairs(B.DumpTotemBar()) do
             print("|cffE8BC75[babu]|r " .. line)
         end
         return
