@@ -780,12 +780,74 @@ local function CollectBindingAuraIDs(cfg, idx, actionSpellID, actionName)
     return set
 end
 
+-- 图腾条按钮解析（2026-11-11，永恒客户端实测）
+-- 目的：把图腾光环的「在范围内」标记挂到**图腾条**上，而不是动作条上的图腾技能按钮。
+-- 实测结构（TotemFrame 挂在 Ellesmere 的 ERB_TotemBarFrame 下）：
+--   TotemFrame
+--     └ Button（匿名、无 ID、无 .Icon 字段，37×37）
+--         ├ Frame → [图标纹理, ...] + Cooldown   ← 图标在这一层
+--         └ Frame → [边框纹理…]
+-- 按钮上没有任何可读的身份信息（name=nil / GetID=0 / .Icon=nil），
+-- 唯一可靠的识别方式是**图标纹理**：按钮子树里某个纹理 == C_Spell.GetSpellTexture(施放技能ID)。
+-- 实测：大地之力图腾 8075 的图标 136023 就长在按钮子树里；Cooldown 的 GetCooldownTimes()
+-- 也与 GetTotemInfo(slot) 完全一致（24425010/300000 ↔ 24425.01/300），那套留作备用、不启用。
+-- ⚠️ 按钮随图腾生灭，**不能缓存**：每次解析都重新找。
+local function FrameHasTexture(frame, want, depth)
+    local okG, regions = pcall(function() return { frame:GetRegions() } end)
+    if okG and regions then
+        for _, r in ipairs(regions) do
+            if r.GetTexture then
+                local okT, t = pcall(r.GetTexture, r)
+                if okT and t and tostring(t) == want then return true end
+            end
+        end
+    end
+    if depth > 0 then
+        local okC, children = pcall(function() return { frame:GetChildren() } end)
+        if okC and children then
+            for _, child in ipairs(children) do
+                if FrameHasTexture(child, want, depth - 1) then return true end
+            end
+        end
+    end
+    return false
+end
+
+local function FindTotemButtonForSpell(spellID)
+    local tf = _G.TotemFrame
+    if not tf or not spellID then return nil end
+    local okShow, shown = pcall(tf.IsShown, tf)
+    if okShow and not shown then return nil end
+    if not (C_Spell and C_Spell.GetSpellTexture) then return nil end
+    local okTex, icon = pcall(C_Spell.GetSpellTexture, spellID)
+    if not okTex or not icon then return nil end
+    local want = tostring(icon)
+    local okC, children = pcall(function() return { tf:GetChildren() } end)
+    if not okC or not children then return nil end
+    for _, btn in ipairs(children) do
+        local okT, otype = pcall(btn.GetObjectType, btn)
+        local okS, s = pcall(btn.IsShown, btn)
+        if okT and otype == "Button" and okS and s then
+            if FrameHasTexture(btn, want, 2) then return btn end
+        end
+    end
+    return nil
+end
+
 -- 按钮缓存解析（含自愈验证）：切专精/翻页后按钮可能已换成别的技能，用 GetActionInfo +
 -- 名字比对验证缓存，失效即作废重找（上游 2026-08-21 修「切专精后剩余时间滞留」）。
 -- ⚠️ 有 p.actionName 时一律用它：Forever 升级换 Rank 后存盘的 actionSpellID 可能已不存在，
 --    由 ID 反查名字会落空；名字在换 Rank 前后不变。
 local function ResolveButton(p, actionSpellID)
     local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
+    -- 图腾条目：优先图腾条（图腾生灭导致按钮重建，不做缓存校验，每次重新按图标找）
+    if p.onTotemBar then
+        local totemBtn = FindTotemButtonForSpell(actionSpellID)
+        if totemBtn then return totemBtn end
+        -- 图腾条上暂时没有该图腾（没放 / 时间到）→ 不再回退动作条：
+        -- 回退会让标记在「动作条技能按钮」和「图腾条」之间来回跳，反而更乱
+        return nil
+    end
     if p.button and p.button.action ~= nil then
         local okA, _, curSpellID = pcall(GetActionInfo, p.button.action)
         local curName = (okA and curSpellID) and C_Spell.GetSpellName(curSpellID) or nil
@@ -1696,7 +1758,7 @@ local function RebuildGroups()
     -- key 以【技能名】为基准（而非 spellID）：Forever 升级换 Rank 后施放技能的 spellID 变了，
     -- 用名字才能复用同一个容器（否则每升一级就多一个停泊屏幕外的旧容器）。
     -- auraIDs 是集合：一条绑定可以同时追踪同名技能的各等级光环 ID。
-    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly)
+    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly, onTotemBar)
         local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionName or actionSpellID)
         local g = merged[key]
         if not g then
@@ -1711,6 +1773,7 @@ local function RebuildGroups()
             g.key = key
             g.unit, g.filter, g.actionSpellID = unit, filter, actionSpellID
             g.actionName = actionName
+            g.onTotemBar = onTotemBar or nil   -- 每轮重建覆盖，旧组复用时不残留
             merged[key] = g
             order[#order + 1] = g
         end
@@ -1833,7 +1896,7 @@ local function RebuildGroups()
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
                 -- 一个 ID 都没展开到（还没学 / 名字对不上）→ 不建组：空组只会白占一个容器
                 if next(ids) then
-                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly)
+                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, e.onTotemBar)
                 end
             end
         end
