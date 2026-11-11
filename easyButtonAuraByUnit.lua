@@ -482,12 +482,25 @@ function B.SetPresetEnabled(key, enabled)
     B.NotifyBindingsChanged()
 end
 
--- 当前职业可用的预设列表（含 class=nil 的种族预设）：{ { key = 序号, e = 条目 } }
-function B.GetClassPresetList()
+-- 预设条目的职业 / 种族门禁（四处消费方共用：配置窗口、建组、学习条目让位、诊断转储）
+-- ⚠️ `class = nil` 的条目不是「人人可用」：种族技能必须再用 `race` 收窄，否则矮人也会看到
+--    兽人/人类/亡灵的条目（2026-11-11 用户实测：矮人萨满的「常用」组里出现血性狂暴/感知/食尸）。
+--    漏配 race 的种族条目等于对所有种族生效，写新条目时别忘。
+function B.IsPresetAvailable(e)
     local _, classToken = UnitClass("player")
+    if e.class and e.class ~= classToken then return false end
+    if e.race then
+        local _, raceToken = UnitRace("player")
+        if e.race ~= raceToken then return false end
+    end
+    return true
+end
+
+-- 当前职业可用的预设列表（含 class=nil 的种族预设，再按种族收窄）：{ { key = 序号, e = 条目 } }
+function B.GetClassPresetList()
     local out = {}
     for i, e in ipairs(B.PRESET_DATA or {}) do
-        if not e.class or e.class == classToken then
+        if B.IsPresetAvailable(e) then
             out[#out + 1] = { key = i, e = e }
         end
     end
@@ -948,11 +961,10 @@ end
 -- ⚠️ 扫描清理处（ScanLearnableAuras）故意【只传 ID】：名字一旦因本地化差异没命中，
 --    被删掉的学习条目就找不回来了；运行时让位不受影响 —— 宁可不清理，也不误删用户数据。
 local function PresetCoversAura(auraID, auraName)
-    -- 只让位于「本职业、且未被用户禁用」的预设：预设关掉时学习条目应恢复显示，
+    -- 只让位于「本职业本种族、且未被用户禁用」的预设：预设关掉时学习条目应恢复显示，
     -- 否则会出现预设关了、学习条目又让位、光环彻底消失的空窗。
-    local _, classToken = UnitClass("player")
     for i, e in ipairs(B.PRESET_DATA or {}) do
-        if (not e.class or e.class == classToken)
+        if B.IsPresetAvailable(e)
             and B.IsPresetEnabled(i) then
             if e.auraName then
                 -- 名字驱动条目【只按名字】收编：它带的数字 ID 只是某一级的旧值，跨 Rank 不可比；
@@ -1759,14 +1771,13 @@ local function RebuildGroups()
         end
     end
 
-    -- 内置预设：按当前职业过滤 + 逐条启停（key = PresetData.lua 中的序号；
+    -- 内置预设：按当前职业 + 种族过滤，逐条启停（key = PresetData.lua 中的序号；
     -- 不做专精过滤，启停存档按专精保存已够用）
     -- 名字驱动（2026-11-08）：永恒（Forever）里同一技能每级是不同 spellID + 不同光环 ID，
     -- 预设条目可写 auraName / actionName → 按名字展开成同名全部 ID，升 Rank 自动跟随
     -- （学习条目早就这么做，这里补齐预设通道）。正式服条目不带这两个字段，行为与旧版一致。
-    local _, classToken = UnitClass("player")
     for key, e in ipairs(B.PRESET_DATA or {}) do
-        if (not e.class or e.class == classToken)
+        if B.IsPresetAvailable(e)
             and B.IsPresetEnabled(key) then
             if e.enchantID or e.imbueName then
                 -- 施放技能按名字取条上当前 Rank（Forever 里 Rank 换 ID；灌注的按钮定位同样走名字）
@@ -2087,7 +2098,6 @@ end
 --       ids 与 nameIDs 都不含真实光环 ID，但 btn 有值 → 追踪集合漏该 ID（不是按钮问题）。
 function B.DumpPresetsVerbose()
     local out = {}
-    local _, classToken = UnitClass("player")
     local nameIndex = B.GetSpellNameIndex()
     local function idList(t)
         local list = {}
@@ -2096,7 +2106,7 @@ function B.DumpPresetsVerbose()
         return table.concat(list, ",")
     end
     for key, e in ipairs(B.PRESET_DATA or {}) do
-        if not e.class or e.class == classToken then
+        if B.IsPresetAvailable(e) then
             local ids = {}
             if type(e.auraSpellID) == "table" then
                 for _, id in ipairs(e.auraSpellID) do ids[id] = true end

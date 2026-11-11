@@ -16,8 +16,11 @@
 --               unit = "target", filter = "HARMFUL|PLAYER" }
 --     · auraSpellID：要追踪的光环法术 ID（单个 number 或 {id1,id2} 数组，任一命中即显示）
 --     · actionSpellID：显示到哪个技能按钮（该技能必须放在动作条上）
---     · class 可选：限定职业（nil = 全职业通用）。不做专精过滤（2026-10-09 用户决策：
+--     · class 可选：限定职业（nil = 不限职业）。不做专精过滤（2026-10-09 用户决策：
 --       专精归属多版本变迁容易写错，如爆炸射击现仅生存猎；启停存档按专精保存已够用）
+--     · race 可选（2026-11-11 起）：限定种族（UnitRace 的 token：Orc / Human / Undead / Dwarf…）。
+--       **种族技能必须写**——class 留空等于对所有职业可见，漏 race 就会出现「矮人看到兽人/人类/
+--       亡灵的条目」。判断在 B.IsPresetAvailable，配置窗口 / 建组 / 学习条目让位 / 诊断四处共用。
 --     · unit/filter 可选：默认 player + HELPFUL；目标减益必须写 unit="target" +
 --       filter="HARMFUL|PLAYER"（|PLAYER=只追踪玩家自己施放的，2026-08-19 烈焰震击踩坑）
 --     · auraName / actionName 可选（2026-11-08 起）：写名字时按名字展开成同名全部 ID，
@@ -87,10 +90,13 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         { class = "PRIEST", auraName = "暗言术：痛", auraSpellID = 589, actionName = "暗言术：痛", actionSpellID = 589,
           unit = "target", filter = "HARMFUL|PLAYER" },
 
-        -- 种族技能（不设 class：靠施放技能的 IsPlayerSpell 门禁自动筛选，只有对应种族生效）
-        { auraName = "血性狂暴", auraSpellID = 20572, actionName = "血性狂暴", actionSpellID = 20572 }, -- 兽人
-        { auraName = "感知",     auraSpellID = 20600, actionName = "感知",     actionSpellID = 20600 }, -- 人类
-        { auraName = "食尸",     auraSpellID = 20578, actionName = "食尸",     actionSpellID = 20577 }, -- 亡灵（光环 20578 = 进食增益，施放技能 20577）
+        -- 种族技能：**必须写 race**，否则矮人也会看到兽人/人类/亡灵的条目（2026-11-11 用户实测）。
+        -- class 留空 + race 收窄 → 只有对应种族的角色在配置窗口看到、运行时建组。
+        { race = "Orc",    auraName = "血性狂暴", auraSpellID = 20572, actionName = "血性狂暴", actionSpellID = 20572 },
+        { race = "Human",  auraName = "感知",     auraSpellID = 20600, actionName = "感知",     actionSpellID = 20600 },
+        -- 亡灵：光环 20578 = 进食增益，施放技能 20577
+        { race = "Undead", auraName = "食尸",     auraSpellID = 20578, actionName = "食尸",     actionSpellID = 20577 },
+        -- 矮人「石像形态」加在表尾（新条目只能追加，插在这里会让后面所有条目的启停记录错位）
 
         -- 虚弱之触（牧师，2026-11-09 收编）：这个技能有【两个阶段、两个单位、两个光环 ID】——
         --   ① 施放 2652 后自身获得同名 buff（buff ID 就是施放 ID 2652），被打一次即消失；
@@ -222,6 +228,14 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         { class = "MAGE", group = "utility", auraSpellID = { 604, 8450, 8451, 10173, 10174 }, actionSpellID = 604 },
         { class = "MAGE", group = "utility", auraSpellID = { 1008, 8455, 10169, 10170 }, actionSpellID = 1008 },
         { class = "WARLOCK", group = "utility", auraSpellID = { 5697 }, actionSpellID = 5697 },
+
+        -- 矮人「石像形态」（2026-11-11 用户是矮人，此前种族条目只有兽人/人类/亡灵）
+        -- 两个 ID 都追：20594 是施放技能本身，65116 是它挂上的增益（1.x 与 WotLK 两套都在用），
+        -- 任一命中即显示，省得猜本客户端用的是哪一个。
+        -- ⚠️ 未实测：勾上后放一次石像形态，若按钮没有倒计时，把该角色 `/babu scan` 的输出给我。
+        -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
+        { race = "Dwarf", auraName = "石像形态", auraSpellID = { 65116, 20594 },
+          actionName = "石像形态", actionSpellID = 20594 },
     }
     return
 end
@@ -331,8 +345,8 @@ B.PRESET_DATA = {
     { class = "EVOKER", auraSpellID = { 381732, 381741, 381746, 381748, 381749, 381750, 381751, 381752, 381753, 381754, 381756, 381757, 381758 }, actionSpellID = 364342 },
     -- 唤魔者 EVOKER（减伤/爆发；光环=技能同ID）
     { class = "EVOKER", auraSpellID = 357210, actionSpellID = 357210 },  -- 深呼吸（爆发）
-    -- 种族技能（与职业无关，不设 class；IsPlayerSpell 自动过滤——只有会该技能的种族才生效）
-    { auraSpellID = 65116, actionSpellID = 20594 },                      -- 石像形态（光环 65116 → 技能 20594，矮人）
+    -- 种族技能（class 留空 + race 收窄；IsPresetAvailable 按 UnitRace 过滤）
+    { race = "Dwarf", auraSpellID = { 65116, 20594 }, actionSpellID = 20594 }, -- 石像形态（光环 65116 / 施放 20594，矮人）
 
     -- 先祖迅捷 443454：先知（Farseer）英雄天赋第 5 行节点，习得后【取代】自然迅捷 378081
     --（玩家身上的无持续时间光环与条上按钮都变成 443454）。⚠️ 必须单列条目、不能并进上面
