@@ -272,6 +272,8 @@ end
 local function PresetDisplayText(e)
     -- actionName 优先：永恒条目跨 Rank，存盘 ID 可能已失效
     local spellName = e.actionName or B.GetSpellDisplayName(e.actionSpellID)
+    -- 灌注条目（武器附魔通道，无光环）：只有一个技能名，不画「光环 → 技能」箭头
+    if e.imbueName then return spellName end
     if e.enchantID then
         -- 上游 enchantName 是英文硬编码；一律显示客户端本地化的技能名
         -- （GetSpellDisplayName 查询失败时返回数字字符串，此时才回退 enchantName）
@@ -289,6 +291,10 @@ end
 
 local function PresetTooltipText(e)
     local spellName = e.actionName or B.GetSpellDisplayName(e.actionSpellID)
+    if e.imbueName then
+        -- 灌注：提示里点明它走武器附魔通道，免得用户以为光环那边漏了
+        return spellName .. " (imbue / weapon enchant)"
+    end
     if e.enchantID then
         return B.GetSpellDisplayName(e.actionSpellID) ..
             (e.enchantID and (" (enchantID: " .. e.enchantID .. ")") or "")

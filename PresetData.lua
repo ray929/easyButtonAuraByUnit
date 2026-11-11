@@ -36,9 +36,10 @@ if not B then return end
 -- 永恒（Forever / Camelot）预设
 -- =========================================================
 -- 来源（2026-11-08 起，持续收编）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/*/SavedVariables/
--- easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，现共 18 条：
---   圣骑士 7 条（尸-太浓）/ 牧师 8 条（爷爷-泡茶 6 条含手动暗言术：痛；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff
---   两阶段）/ 种族 3 条（血性狂暴·兽人、感知·人类、食尸·亡灵）。
+-- easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，外加客户端实测
+-- （`/babu weapon`），现共 19 条：圣骑士 7 条（尸-太浓）/ 牧师 8 条（爷爷-泡茶 6 条含手动暗言术：痛；
+-- 爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 1 条（石化武器·武器灌注，走附魔通道）/
+-- 种族 3 条（血性狂暴·兽人、感知·人类、食尸·亡灵）。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -86,6 +87,17 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         { class = "PRIEST", auraName = "虚弱之触", auraSpellID = 2652, actionName = "虚弱之触", actionSpellID = 2652 },
         { class = "PRIEST", auraName = "虚弱之触", auraSpellID = 2943, actionName = "虚弱之触", actionSpellID = 2652,
           unit = "target", filter = "HARMFUL|PLAYER" },
+
+        -- 石化武器（萨满武器灌注，2026-11-11 实测）：它【不是 unit aura】——客户端把灌注做成
+        -- item enchant（Enum.ItemEnchantType.Imbue = 3），/babu scan 一条光环都扫不到，
+        -- 只能走武器附魔覆盖层通道（1 秒 ticker）。本 Rank（施放 8017）实测：
+        -- enchantID = 29、enchantIconID = 136086，tooltip 写作「石化 1（54分钟）」——
+        -- 附魔名（石化 1）与法术名（石化武器）不一致，所以按名字认这条路走不通。
+        -- 升 Rank 后 enchantID 会变 → 同时按【附魔图标】匹配（同一灌注的图标跨 Rank 不变）；
+        -- 若新 Rank 连图标也换，把 /babu weapon 的新值补进 enchantIDs / imbueIcons。
+        -- 施放技能按名字解析到条上当前 Rank（actionName 驱动），按钮定位不受 Rank 影响。
+        { class = "SHAMAN", imbueName = "石化武器", enchantIDs = { 29 }, imbueIcons = { 136086 },
+          actionName = "石化武器", actionSpellID = 8017 },
     }
     return
 end

@@ -1409,7 +1409,59 @@ end
 --   ⚠️ 该 API 谓词含 AllowedWhenUntainted：tainted 代码调用会返回 secret 值 → 必须过
 --      IsSecret 判定，secret 时放弃该槽（宁可不显示，绝不比较 secret 数值）。
 -- =========================================================
-local function GetWeaponEnchantExpiration(enchantID)
+-- 附魔类型 3 = Enum.ItemEnchantType.Imbue（萨满武器灌注 / 盗贼毒药）：它不是 unit aura，
+-- 而是挂在武器上的 item enchant，只能走这条通道。
+local IMBUE_ENCHANT_TYPE = (Enum and Enum.ItemEnchantType and Enum.ItemEnchantType.Imbue) or 3
+
+-- 遍历双武器上的所有附魔条目（C_Item.GetWeaponEnchantInfo 列表；Forever 才有）。
+-- 每条给 kind（enchantType）、left（timeLeft，毫秒）、id（enchantID）、icon（enchantIconID）。
+-- ⚠️ 逐字段 IsSecret 防护：战斗中 tainted 读可能返回 secret，未防护的比较会 hard-error。
+local function ForEachWeaponEnchant(cb)
+    if not (C_Item and C_Item.GetWeaponEnchantInfo and Enum and Enum.WeaponSlot) then return end
+    for _, ws in ipairs({ Enum.WeaponSlot.MainHand, Enum.WeaponSlot.OffHand }) do
+        local ok, list = pcall(C_Item.GetWeaponEnchantInfo, ws)
+        if ok and type(list) == "table" then
+            for i = 1, #list do
+                local e = list[i]
+                if type(e) == "table" then
+                    local has, kind, left = e.hasEnchant, e.enchantType, e.timeLeft
+                    local id, icon = e.enchantID, e.enchantIconID
+                    if not (IsSecret(has) or IsSecret(kind) or IsSecret(left)) then
+                        if has and left and left > 0 then
+                            cb(kind, left, IsSecret(id) and nil or id, IsSecret(icon) and nil or icon)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- 灌注（imbue）剩余秒数：命中条件二选一——enchantID 在条目声明的 ID 集合里，
+-- 或 enchantIconID 命中声明/学习到的图标集合（灌注图标跨 Rank 不变，是这里唯一能跨等级的东西）。
+local function ImbueRemainingSec(p)
+    local best
+    ForEachWeaponEnchant(function(kind, left, id, icon)
+        if kind ~= IMBUE_ENCHANT_TYPE then return end
+        local hit = (id and p.enchantIDs and p.enchantIDs[id])
+            or (icon and p.imbueIcons and p.imbueIcons[icon])
+        if hit then
+            local sec = left / 1000
+            if not best or sec > best then best = sec end
+        end
+    end)
+    return best
+end
+
+local function GetWeaponEnchantExpiration(p)
+    -- 灌注通道（永恒萨满 / 盗贼）：按附魔 ID 或附魔图标匹配
+    if p.imbueName then
+        local sec = ImbueRemainingSec(p)
+        if sec then return sec end
+    end
+    -- 临时附魔通道（正式服）：enchantID 精确匹配，双槽取先命中者
+    local enchantID = p.enchantID
+    if not enchantID then return nil end
     local function trySlot(slot)
         local ok, info = pcall(C_PaperDollInfo.GetTemporaryEnchantmentInfo, slot)
         -- MayReturnNothing：无临时附魔时返回 nil
@@ -1430,7 +1482,7 @@ end
 local function EnchantTick(p)
     local ov = p.overlay
     local cd = p.cd
-    local expSec = GetWeaponEnchantExpiration(p.enchantID)
+    local expSec = GetWeaponEnchantExpiration(p)
     if not expSec or expSec <= 0 then
         ov:Hide()
         p._active = false
@@ -1504,7 +1556,8 @@ local function PositionOverlay(ov, btn, p)
 end
 
 local function UpdateEnchant(p)
-    if not p.enchantID or not p.actionSpellID then return end
+    -- 两种附魔条目：正式服临时附魔（enchantID）与永恒武器灌注（imbueName，无固定 ID）
+    if not (p.enchantID or p.imbueName) or not p.actionSpellID then return end
     -- 玩家没学该施放技能 → 清理残留并跳过
     -- （武器附魔在武器上、跨专精持续存在：切专精后不清覆盖层，倒计时会冻结滞留直到 reload）
     if not IsPlayerSpell(p.actionSpellID) then
@@ -1665,10 +1718,27 @@ local function RebuildGroups()
     for key, e in ipairs(B.PRESET_DATA or {}) do
         if (not e.class or e.class == classToken)
             and B.IsPresetEnabled(key) then
-            if e.enchantID then
+            if e.enchantID or e.imbueName then
+                -- 施放技能按名字取条上当前 Rank（Forever 里 Rank 换 ID；灌注的按钮定位同样走名字）
+                local actionName = e.actionName or B.GetSpellNamePlain(e.actionSpellID)
+                local actionSpellID = e.actionSpellID
+                if actionName then
+                    local barIDs = nameIndex.bar[actionName]
+                    if barIDs then
+                        for id in pairs(barIDs) do actionSpellID = id; break end
+                    end
+                end
+                local ids, icons
+                if e.enchantID then ids = { [e.enchantID] = true } end
+                for _, id in ipairs(e.enchantIDs or {}) do ids = ids or {}; ids[id] = true end
+                for _, icon in ipairs(e.imbueIcons or {}) do icons = icons or {}; icons[icon] = true end
                 B.enchants[#B.enchants + 1] = {
                     enchantID = e.enchantID,
-                    actionSpellID = e.actionSpellID,
+                    enchantIDs = ids,     -- 可接受的附魔 ID 集合（含预设声明的各 Rank 观察值）
+                    imbueIcons = icons,   -- 可接受的附魔图标集合（灌注图标跨 Rank 不变）
+                    imbueName = e.imbueName,
+                    actionSpellID = actionSpellID,
+                    actionName = actionName,
                     enchantName = e.enchantName,
                 }
             else
