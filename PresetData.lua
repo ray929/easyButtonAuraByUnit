@@ -51,9 +51,10 @@ if not B then return end
 -- 精选部分来源（2026-11-08 起，持续收编）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/
 -- */SavedVariables/easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，
 -- 外加客户端实测（`/babu weapon`）：圣骑士 7 条（尸-太浓）/ 牧师 8 条（爷爷-泡茶 6 条含手动
--- 暗言术：痛；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 2 条（石化武器、火舌武器，
--- 都是武器灌注、走附魔通道）/ 种族 4 条（血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人）/
--- 各职业常驻增益 13 条。合计 34 条精选 + 54 条导入 = 88 条。
+-- 暗言术：痛；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 4 条（石化武器、火舌武器，
+-- 都是武器灌注、走附魔通道；大地之力图腾、石肤图腾，buff 名与施放名不同）/ 种族 4 条
+-- （血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人）/ 各职业常驻增益 13 条。
+-- 合计 36 条精选 + 54 条导入 = 90 条。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -245,6 +246,22 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
         { class = "SHAMAN", imbueName = "火舌武器", enchantIDs = { 5 }, imbueIcons = { 135814 },
           actionName = "火舌武器", actionSpellID = 8023 },
+
+        -- 图腾光环（萨满，2026-11-11 从角色「爷爷-喝不下了」的手动绑定收编）：
+        -- 图腾类技能是【施放一个图腾 → 给自己挂一个同名家族的光环】，两边 ID 与名字都不同：
+        --   大地之力图腾 8075 → 自身 buff「大地之力」8076
+        --   石肤图腾     8071 → 自身 buff「石肤术」  8072
+        -- ⚠️ 所以 auraName 写的是 **buff 名**、actionName 写的是 **施放技能名**，两者不同名。
+        --    按钮定位走 actionName；auraSpellID 只能写死 buff ID（名字索引里查不到 buff 名），
+        --    升 Rank 后靠 `specs[specID].auraSeen` 缓存按 auraName 补真身 ID
+        --    （这两个角色的缓存里已分别记到 8076 / 8072，实测印证）。
+        -- ⚠️ 其它图腾（治疗之泉 / 法力之泉 / 风之优雅 / 灼热 / 抗性…）存档里没有绑定记录，
+        --    没有实证 ID 就不猜——挂一次让脱战扫描记下，再把 `/babu scan` 或存档发我。
+        -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
+        { class = "SHAMAN", auraName = "大地之力", auraSpellID = 8076,
+          actionName = "大地之力图腾", actionSpellID = 8075 },
+        { class = "SHAMAN", auraName = "石肤术", auraSpellID = 8072,
+          actionName = "石肤图腾", actionSpellID = 8071 },
     }
     return
 end
