@@ -815,6 +815,25 @@ local function FrameHasTexture(frame, want, depth)
     return false
 end
 
+-- 读图腾按钮的图标纹理。实测两种形态都出现过：
+--   · Ellesmere 接管前：Button > Frame > 纹理（匿名，只能递归找）
+--   · Ellesmere 接管后：Button > .Icon > .Icon.Texture（fstack 实证，走这条快路径）
+local function TotemButtonIcon(btn)
+    local icon = btn.Icon
+    if not icon then return nil end
+    -- 形态 A：Icon 本身就是纹理对象
+    if icon.GetTexture then
+        local ok, t = pcall(icon.GetTexture, icon)
+        if ok and t then return tostring(t) end
+    end
+    -- 形态 B：Icon 是 Frame，纹理存 .Texture
+    if icon.Texture then
+        local ok, t = pcall(icon.Texture.GetTexture, icon.Texture)
+        if ok and t then return tostring(t) end
+    end
+    return nil
+end
+
 local function FindTotemButtonForSpell(spellID)
     local tf = _G.TotemFrame
     if not tf or not spellID then return nil end
@@ -830,6 +849,9 @@ local function FindTotemButtonForSpell(spellID)
         local okT, otype = pcall(btn.GetObjectType, btn)
         local okS, s = pcall(btn.IsShown, btn)
         if okT and otype == "Button" and okS and s then
+            -- 快路径：.Icon（Ellesmere 接管后存在）
+            if TotemButtonIcon(btn) == want then return btn end
+            -- 慢路径：递归找纹理（接管前的匿名结构）
             if FrameHasTexture(btn, want, 2) then return btn end
         end
     end
@@ -2171,12 +2193,42 @@ function B.DumpGroupsVerbose()
         local auras = {}
         for id in pairs(p.auraIDs or {}) do auras[#auras + 1] = tostring(id) end
         table.sort(auras)
-        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s name=%s auras=[%s] container=%s btn=%s initFailed=%s"):format(
+        -- 按钮可能匿名（图腾条按钮 name=nil）：区分「没解析到按钮」和「解析到了但没名字」，
+        -- 否则两种情况都打印 nil，排查时分不清。
+        local btnText
+        if p.button then
+            local nm = p.button:GetName()
+            btnText = nm and nm or ("unnamed " .. tostring(p.button:GetObjectType()))
+        else
+            btnText = "nil"
+        end
+        -- 容器位置：停靠屏外时 _rectL 会是一个很大的负值或 nil，配合 _docked 一起看
+        local rect = ""
+        if p.container then
+            local okL, l = pcall(p.container.GetLeft, p.container)
+            local okT, t = pcall(p.container.GetTop, p.container)
+            local okW, w = pcall(p.container.GetWidth, p.container)
+            local okH, h = pcall(p.container.GetHeight, p.container)
+            rect = (" rect=%s,%s %sx%s"):format(
+                tostring(okL and l), tostring(okT and t),
+                tostring(okW and w), tostring(okH and h))
+        end
+        -- AuraButton 是否已创建、尺寸多少：overlayOnly 边框画在它身上，尺寸为 0 或 nil 就是没建起来
+        local ab = "nil"
+        if p.auraButton then
+            local okS, w, h = pcall(p.auraButton.GetSize, p.auraButton)
+            local okSh, sh = pcall(p.auraButton.IsShown, p.auraButton)
+            ab = ("%s %sx%s"):format(tostring(okSh and sh), tostring(okS and w), tostring(okS and h))
+        end
+        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s name=%s auras=[%s] totem=%s mark=%s overlay=%s container=%s%s btn=%s auraBtn=%s initFailed=%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
             tostring(p.actionName or "-"),
             table.concat(auras, ","),
+            tostring(p.onTotemBar or false),
+            tostring(p.markStyle or "-"),
+            tostring(p.overlayOnly or false),
             p.container and (p._docked and "docked" or "shown") or "nil",
-            p.button and p.button:GetName() or "nil",
+            rect, btnText, ab,
             tostring(p._initFailed))
     end
     for i, p in ipairs(B.enchants) do
