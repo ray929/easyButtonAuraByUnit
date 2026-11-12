@@ -866,11 +866,10 @@ local function ResolveButton(p, actionSpellID)
     local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
     -- 图腾条目：优先图腾条（图腾生灭导致按钮重建，不做缓存校验，每次重新按图标找）
     if p.onTotemBar then
-        local totemBtn = FindTotemButtonForSpell(actionSpellID)
-        if totemBtn then return totemBtn end
+        p.button = FindTotemButtonForSpell(actionSpellID)
         -- 图腾条上暂时没有该图腾（没放 / 时间到）→ 不再回退动作条：
         -- 回退会让标记在「动作条技能按钮」和「图腾条」之间来回跳，反而更乱
-        return nil
+        return p.button
     end
     if p.button and p.button.action ~= nil then
         local okA, _, curSpellID = pcall(GetActionInfo, p.button.action)
@@ -1374,9 +1373,19 @@ local function SetupAuraButton(p, btn)
         local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
         if p.markStyle == "border" then
             local th = B.Style.MARK_BORDER_THICKNESS
-            local TEX = "Interface\\Buttons\\WHITE8X8"
-            -- { 纹理锚点, 按钮锚点, 纹理锚点2, 按钮锚点2, 宽, 高 }
-            -- 两条锚点把纹理拉满整条边，另一个尺寸手动给定。
+            -- 纯色边优先用 SetColorTexture：不依赖任何纹理资源，客户端换皮也拿不走。
+            -- ⚠️ 早先版本写死 "Interface\\Buttons\\WHITE8X8"，在这个客户端上画出来是空的
+            --    （纹理不存在或被皮肤插件隐藏），于是「链路全通但看不见边框」。
+            --    没有 SetColorTexture 的旧客户端回退纯白纹理 + 顶点色。
+            local function Paint(t)
+                if t.SetColorTexture then
+                    t:SetColorTexture(c[1], c[2], c[3], 1)
+                else
+                    t:SetTexture("Interface\\Buttons\\WHITE8X8")
+                    t:SetVertexColor(c[1], c[2], c[3], 1)
+                end
+            end
+            -- { 锚点, 锚点2, 宽, 高 }：两个锚点把纹理拉满整条边，另一个尺寸手动给定
             local edges = {
                 { "TOPLEFT", "TOPRIGHT", nil, th },        -- 上
                 { "BOTTOMLEFT", "BOTTOMRIGHT", nil, th },  -- 下
@@ -1385,9 +1394,10 @@ local function SetupAuraButton(p, btn)
             }
             local list = {}
             for _, e in ipairs(edges) do
-                local t = btn:CreateTexture(nil, "OVERLAY")
-                t:SetTexture(TEX)
-                t:SetVertexColor(c[1], c[2], c[3], 1)
+                -- ⚠️ 第四个参数 sublevel 必须给到顶（7）：AuraButton 是暴雪控件，它自己的
+                --    图标/冷却纹理也在 OVERLAY 层，同 sublevel 时后画的会被压住 → 边框看不见。
+                local t = btn:CreateTexture(nil, "OVERLAY", nil, 7)
+                Paint(t)
                 t:SetPoint(e[1], btn, e[1], 0, 0)
                 t:SetPoint(e[2], btn, e[2], 0, 0)
                 if e[4] then t:SetHeight(e[4]) end
@@ -2222,7 +2232,18 @@ function B.DumpGroupsVerbose()
             ab = ("%s %.0fx%.0f"):format(tostring(okSh and sh),
                 tonumber(okS and w) or 0, tonumber(okS and h) or 0)
         end
-        out[#out + 1] = ("g%d %s/%s sp=%s n=%s a=[%s] totem=%s mark=%s ov=%s c=%s%s btn=%s ab=%s fail=%s"):format(
+        -- 边框纹理：数量 + 第一条的尺寸。「画了但看不见」时看这里——
+        -- 尺寸为 0 说明锚点没拉开，数量为 0 说明根本没走到 border 分支
+        local bx = ""
+        if p.borderTex and p.borderTex[1] then
+            local t1 = p.borderTex[1]
+            local okW, w = pcall(t1.GetWidth, t1)
+            local okH, h = pcall(t1.GetHeight, t1)
+            local okA, a = pcall(t1.GetAlpha, t1)
+            bx = (" bx=%d %.0fx%.0f a=%s"):format(#p.borderTex,
+                tonumber(okW and w) or 0, tonumber(okH and h) or 0, tostring(okA and a))
+        end
+        out[#out + 1] = ("g%d %s/%s sp=%s n=%s a=[%s] totem=%s mark=%s ov=%s c=%s%s btn=%s ab=%s%s fail=%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
             tostring(p.actionName or "-"),
             table.concat(auras, ","),
@@ -2230,7 +2251,7 @@ function B.DumpGroupsVerbose()
             tostring(p.markStyle or "-"),
             tostring(p.overlayOnly or false),
             p.container and (p._docked and "dock" or "show") or "nil",
-            rect, btnText, ab,
+            rect, btnText, ab, bx,
             tostring(p._initFailed))
     end
     for i, p in ipairs(B.enchants) do
