@@ -797,25 +797,29 @@ end
 -- 实测：大地之力图腾 8075 的图标 136023 就长在按钮子树里；Cooldown 的 GetCooldownTimes()
 -- 也与 GetTotemInfo(slot) 完全一致（24425010/300000 ↔ 24425.01/300），那套留作备用、不启用。
 -- ⚠️ 按钮随图腾生灭，**不能缓存**：每次解析都重新找。
-local function FrameHasTexture(frame, want, depth)
+-- 返回「自身纹理里就有这个图标」的**最内层帧**（深度优先：先钻子帧，再认自己）。
+-- ⚠️ 为什么不能用外层：扔两个图腾时，图腾条的某个帧可能横跨所有槽位，图标纹理藏在它的子帧里。
+--    按外层锚定 → 绿框横跨两个图标（2026-11-12 用户截图实测错位）。取最内层 = 严丝合缝框住图标。
+local function FindTextureHost(frame, want, depth)
+    if depth > 0 then
+        local okC, children = pcall(function() return { frame:GetChildren() } end)
+        if okC and children then
+            for _, child in ipairs(children) do
+                local hit = FindTextureHost(child, want, depth - 1)
+                if hit then return hit end
+            end
+        end
+    end
     local okG, regions = pcall(function() return { frame:GetRegions() } end)
     if okG and regions then
         for _, r in ipairs(regions) do
             if r.GetTexture then
                 local okT, t = pcall(r.GetTexture, r)
-                if okT and t and tostring(t) == want then return true end
+                if okT and t and tostring(t) == want then return frame end
             end
         end
     end
-    if depth > 0 then
-        local okC, children = pcall(function() return { frame:GetChildren() } end)
-        if okC and children then
-            for _, child in ipairs(children) do
-                if FrameHasTexture(child, want, depth - 1) then return true end
-            end
-        end
-    end
-    return false
+    return nil
 end
 
 -- 读图腾按钮的图标纹理。实测两种形态都出现过：
@@ -868,18 +872,19 @@ local function CollectCooldowns(frame, depth, out)
     return out
 end
 
--- 按钮的冷却起始时间是否对得上某个活着的图腾（±1 秒容差）
+-- 按钮的冷却起始时间是否对得上某个活着的图腾（±1 秒容差）。命中时返回那个 Cooldown 对象
+-- （调用方用它的父级当锚定帧：Cooldown 的父级就是图标帧，比外层按钮精确）。
 local function TotemButtonMatchesStarts(btn, starts)
     for _, cd in ipairs(CollectCooldowns(btn, 3, {})) do
         local ok, s = pcall(cd.GetCooldownTimes, cd)
         if ok and type(s) == "number"
             and not (type(IsSecret) == "function" and IsSecret(s)) then
             for _, start in ipairs(starts) do
-                if math.abs(s - start) < 1000 then return true end
+                if math.abs(s - start) < 1000 then return cd end
             end
         end
     end
-    return false
+    return nil
 end
 
 -- 找图腾条上「某个图腾」的按钮。p 可选：只用来记录失败原因（/babu debug 打印），
@@ -915,12 +920,27 @@ local function FindTotemButtonForSpell(spellID, p)
     -- ⚠️ IsShown 只用来「优先」，不能当硬门禁：战斗中对部分帧读不到（pcall 失败或 secret），
     --    一旦当门禁，读失败一次就整组认不出按钮 → 绿框消失一段时间（用户实测「有时候会消失」）。
     --    先认显示中的，再退到全部按钮。
+    -- 返回的是【锚定用的帧】：`.Icon` 帧或最内层带图标的帧，不是外层按钮——
+    -- 两个图腾时外层可能横跨两个槽位，锚它会画出一个横跨两个图标的绿框。
+    local function iconHost(btn)
+        local icon = btn.Icon
+        if icon then
+            local okT, otype = pcall(icon.GetObjectType, icon)
+            -- 尺寸校验：.Icon 可能存在但还没被布局成有尺寸的帧（此时锚它 = 0×0，绿框消失）
+            local okW, w = pcall(icon.GetWidth, icon)
+            local usable = okW and type(w) == "number" and w > 1
+                and not (type(IsSecret) == "function" and IsSecret(w))
+            if okT and otype and otype ~= "Texture" and usable then return icon end
+        end
+        return FindTextureHost(btn, want, 3) or btn
+    end
     local function matchIcon(list)
         for _, btn in ipairs(list) do
             -- 快路径：.Icon（Ellesmere 接管后存在）
-            if TotemButtonIcon(btn) == want then return btn, "icon field" end
-            -- 慢路径：递归找纹理（接管前的匿名结构）
-            if FrameHasTexture(btn, want, 2) then return btn, "texture scan" end
+            if TotemButtonIcon(btn) == want then return iconHost(btn), "icon field" end
+            -- 慢路径：钻到最内层带该图标的帧
+            local host = FindTextureHost(btn, want, 3)
+            if host then return host, "texture scan" end
         end
         return nil
     end
@@ -937,8 +957,12 @@ local function FindTotemButtonForSpell(spellID, p)
     if starts then
         for _, list in ipairs({ shownBtns, allBtns }) do
             for _, b in ipairs(list) do
-                if TotemButtonMatchesStarts(b, starts) then
+                local cd = TotemButtonMatchesStarts(b, starts)
+                if cd then
                     if p then p._totemWhy = "cooldown time" end
+                    -- 锚 Cooldown 的父级（图标帧），别锚外层按钮：两个图腾时外层可能横跨两槽
+                    local okP, par = pcall(cd.GetParent, cd)
+                    if okP and par then return par end
                     return b
                 end
             end
