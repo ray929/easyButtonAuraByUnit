@@ -1361,8 +1361,32 @@ end
 --   fs  → SetApplicationCount（层数，>1 才显示）
 --   glow → CDMButtonAuras 同款柔光纹理（ADD 混合），挂在 AuraButton 上随按钮显隐，
 --          不读任何存在性信号。
+-- 容器与 AuraButton 只作绘图载体：必须让鼠标完全穿透。
+-- 若不禁用：暴雪 AuraButton 自带鼠标处理，悬停时弹出它自己的法术 tooltip，
+-- 与按钮原有的 tooltip 叠成两个框（2026-11-12 用户实测：图腾条多出一个提示框）。
+-- 禁用后鼠标落到下层的真实按钮上，tooltip 只保留原本那一个。
+-- depth 递归子帧：AuraButton 的图标/冷却可能挂在自己的子帧上，只关父级挡不住。
+local function MakeClickThrough(frame, depth)
+    if not frame then return end
+    for _, m in ipairs({ "EnableMouse", "EnableMouseMotion",
+                         "SetMouseClickEnabled", "SetMouseMotionEnabled" }) do
+        local fn = frame[m]
+        if fn then pcall(fn, frame, false) end
+    end
+    for _, script in ipairs({ "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel" }) do
+        pcall(frame.SetScript, frame, script, nil)
+    end
+    if (depth or 0) <= 0 then return end
+    local ok, kids = pcall(function() return { frame:GetChildren() } end)
+    if not ok or type(kids) ~= "table" then return end
+    for _, kid in ipairs(kids) do
+        MakeClickThrough(kid, depth - 1)
+    end
+end
+
 local function SetupAuraButton(p, btn)
     btn:SetAllPoints(p.container)
+    MakeClickThrough(btn, 2)   -- 鼠标穿透：否则多弹一个 AuraButton 自己的 tooltip
     if p.overlayOnly then
         -- 无持续时间光环（形态/瞬发开关）：不挂倒计时框与层数。
         -- 标记样式由 p.markStyle 决定：
@@ -1457,6 +1481,7 @@ local function EnsureContainerForGroup(p)
     local filter = p.filter or ((p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER")
 
     local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
+    MakeClickThrough(container, 0)   -- 容器本身也不吃鼠标（否则会吞掉底下按钮的 tooltip）
     container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(1000)
     container:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
