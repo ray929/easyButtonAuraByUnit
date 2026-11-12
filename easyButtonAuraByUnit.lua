@@ -166,11 +166,6 @@ B.Style = {
     GLOW_SELF        = { 0.00, 0.70, 0.00 },                    -- 柔光（自身）：绿（CDMButtonAuras 同款）
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
     GLOW_ALPHA       = 0.5,
-    -- 边框标记（markStyle="border"）：四边描边的粗细（像素，UI 单位）
-    MARK_BORDER_THICKNESS = 3,
-    -- 边框距离按钮边缘的距离：0 = 贴着按钮边缘画（边框整体在按钮外侧 0~thickness 像素），
-    -- >0 = 再往外留一段空隙。太大会显得框和图标脱开，1 已是极限。
-    MARK_BORDER_OUTSET    = 0,
 }
 
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
@@ -785,208 +780,12 @@ local function CollectBindingAuraIDs(cfg, idx, actionSpellID, actionName)
     return set
 end
 
--- 图腾条按钮解析（2026-11-11，永恒客户端实测）
--- 目的：把图腾光环的「在范围内」标记挂到**图腾条**上，而不是动作条上的图腾技能按钮。
--- 实测结构（TotemFrame 挂在 Ellesmere 的 ERB_TotemBarFrame 下）：
---   TotemFrame
---     └ Button（匿名、无 ID、无 .Icon 字段，37×37）
---         ├ Frame → [图标纹理, ...] + Cooldown   ← 图标在这一层
---         └ Frame → [边框纹理…]
--- 按钮上没有任何可读的身份信息（name=nil / GetID=0 / .Icon=nil），
--- 唯一可靠的识别方式是**图标纹理**：按钮子树里某个纹理 == C_Spell.GetSpellTexture(施放技能ID)。
--- 实测：大地之力图腾 8075 的图标 136023 就长在按钮子树里；Cooldown 的 GetCooldownTimes()
--- 也与 GetTotemInfo(slot) 完全一致（24425010/300000 ↔ 24425.01/300），那套留作备用、不启用。
--- ⚠️ 按钮随图腾生灭，**不能缓存**：每次解析都重新找。
--- 返回「自身纹理里就有这个图标」的**最内层帧**（深度优先：先钻子帧，再认自己）。
--- ⚠️ 为什么不能用外层：扔两个图腾时，图腾条的某个帧可能横跨所有槽位，图标纹理藏在它的子帧里。
---    按外层锚定 → 绿框横跨两个图标（2026-11-12 用户截图实测错位）。取最内层 = 严丝合缝框住图标。
-local function FindTextureHost(frame, want, depth)
-    if depth > 0 then
-        local okC, children = pcall(function() return { frame:GetChildren() } end)
-        if okC and children then
-            for _, child in ipairs(children) do
-                local hit = FindTextureHost(child, want, depth - 1)
-                if hit then return hit end
-            end
-        end
-    end
-    local okG, regions = pcall(function() return { frame:GetRegions() } end)
-    if okG and regions then
-        for _, r in ipairs(regions) do
-            if r.GetTexture then
-                local okT, t = pcall(r.GetTexture, r)
-                if okT and t and tostring(t) == want then return frame end
-            end
-        end
-    end
-    return nil
-end
-
--- 读图腾按钮的图标纹理。实测两种形态都出现过：
---   · Ellesmere 接管前：Button > Frame > 纹理（匿名，只能递归找）
---   · Ellesmere 接管后：Button > .Icon > .Icon.Texture（fstack 实证，走这条快路径）
-local function TotemButtonIcon(btn)
-    local icon = btn.Icon
-    if not icon then return nil end
-    -- 形态 A：Icon 本身就是纹理对象
-    if icon.GetTexture then
-        local ok, t = pcall(icon.GetTexture, icon)
-        if ok and t then return tostring(t) end
-    end
-    -- 形态 B：Icon 是 Frame，纹理存 .Texture
-    if icon.Texture then
-        local ok, t = pcall(icon.Texture.GetTexture, icon.Texture)
-        if ok and t then return tostring(t) end
-    end
-    return nil
-end
-
--- 当前活着的图腾的「开始时间」（毫秒）：图标识别失败时的备用匹配键。
--- 实测 Cooldown:GetCooldownTimes() 的 start/dur 与 GetTotemInfo 的完全一致
--- （24425010/300000 ↔ 24425.01/300），所以只要图腾在，时间就一定对得上。
-local function GetLiveTotemStarts()
-    if type(GetTotemInfo) ~= "function" then return nil end
-    local out
-    for slot = 1, 4 do
-        local ok, have, _, startTime, duration = pcall(GetTotemInfo, slot)
-        if ok and have and type(startTime) == "number" and type(duration) == "number"
-            and startTime > 0 and not (type(IsSecret) == "function" and IsSecret(startTime)) then
-            out = out or {}
-            out[#out + 1] = startTime * 1000
-        end
-    end
-    return out
-end
-
--- 收集按钮子树里的 Cooldown（图腾按钮结构：Button > Frame > Cooldown）
-local function CollectCooldowns(frame, depth, out)
-    local okC, children = pcall(function() return { frame:GetChildren() } end)
-    if not okC or not children then return out end
-    for _, child in ipairs(children) do
-        local okT, otype = pcall(child.GetObjectType, child)
-        if okT and otype == "Cooldown" and child.GetCooldownTimes then
-            out[#out + 1] = child
-        end
-        if depth > 1 then CollectCooldowns(child, depth - 1, out) end
-    end
-    return out
-end
-
--- 按钮的冷却起始时间是否对得上某个活着的图腾（±1 秒容差）。命中时返回那个 Cooldown 对象
--- （调用方用它的父级当锚定帧：Cooldown 的父级就是图标帧，比外层按钮精确）。
-local function TotemButtonMatchesStarts(btn, starts)
-    for _, cd in ipairs(CollectCooldowns(btn, 3, {})) do
-        local ok, s = pcall(cd.GetCooldownTimes, cd)
-        if ok and type(s) == "number"
-            and not (type(IsSecret) == "function" and IsSecret(s)) then
-            for _, start in ipairs(starts) do
-                if math.abs(s - start) < 1000 then return cd end
-            end
-        end
-    end
-    return nil
-end
-
--- 找图腾条上「某个图腾」的按钮。p 可选：只用来记录失败原因（/babu debug 打印），
--- 死亡后失效的现场排查全靠它（2026-11-12 用户实测：死一次后绿框再也不出现，reload 才好）。
-local function FindTotemButtonForSpell(spellID, p)
-    local function fail(msg)
-        if p then p._totemWhy = msg end
-        return nil
-    end
-    local tf = _G.TotemFrame
-    if not tf or not spellID then return fail("no TotemFrame/spellID") end
-    -- ⚠️ 图腾条隐藏【不】作为硬门禁：条隐藏但按钮还在的情况（刚放/刚换/战斗中）照样能认，
-    --    这里只是把状态记进诊断，让「认不出来」时的 tw= 有上下文。
-    local okShow, shown = pcall(tf.IsShown, tf)
-    local tfHidden = (okShow and not shown)
-    if not (C_Spell and C_Spell.GetSpellTexture) then return fail("no GetSpellTexture") end
-    local okTex, icon = pcall(C_Spell.GetSpellTexture, spellID)
-    if not okTex or not icon then return fail("no icon for " .. tostring(spellID)) end
-    local want = tostring(icon)
-    local okC, children = pcall(function() return { tf:GetChildren() } end)
-    if not okC or not children or #children == 0 then return fail("TotemFrame no children") end
-
-    local allBtns, shownBtns = {}, {}
-    for _, btn in ipairs(children) do
-        local okT, otype = pcall(btn.GetObjectType, btn)
-        if okT and otype == "Button" then
-            allBtns[#allBtns + 1] = btn
-            local okS, s = pcall(btn.IsShown, btn)
-            if okS and s then shownBtns[#shownBtns + 1] = btn end
-        end
-    end
-
-    -- ⚠️ IsShown 只用来「优先」，不能当硬门禁：战斗中对部分帧读不到（pcall 失败或 secret），
-    --    一旦当门禁，读失败一次就整组认不出按钮 → 绿框消失一段时间（用户实测「有时候会消失」）。
-    --    先认显示中的，再退到全部按钮。
-    -- 返回的是【锚定用的帧】：`.Icon` 帧或最内层带图标的帧，不是外层按钮——
-    -- 两个图腾时外层可能横跨两个槽位，锚它会画出一个横跨两个图标的绿框。
-    local function iconHost(btn)
-        local icon = btn.Icon
-        if icon then
-            local okT, otype = pcall(icon.GetObjectType, icon)
-            -- 尺寸校验：.Icon 可能存在但还没被布局成有尺寸的帧（此时锚它 = 0×0，绿框消失）
-            local okW, w = pcall(icon.GetWidth, icon)
-            local usable = okW and type(w) == "number" and w > 1
-                and not (type(IsSecret) == "function" and IsSecret(w))
-            if okT and otype and otype ~= "Texture" and usable then return icon end
-        end
-        return FindTextureHost(btn, want, 3) or btn
-    end
-    local function matchIcon(list)
-        for _, btn in ipairs(list) do
-            -- 快路径：.Icon（Ellesmere 接管后存在）
-            if TotemButtonIcon(btn) == want then return iconHost(btn), "icon field" end
-            -- 慢路径：钻到最内层带该图标的帧
-            local host = FindTextureHost(btn, want, 3)
-            if host then return host, "texture scan" end
-        end
-        return nil
-    end
-    local btn, how = matchIcon(shownBtns)
-    if not btn then btn, how = matchIcon(allBtns) end
-    if btn then
-        if p then p._totemWhy = how end
-        return btn
-    end
-
-    -- 备用键：图标纹理认不出来时，按 Cooldown 起始时间与 GetTotemInfo 对表。
-    -- 这条专门对付「图标纹理在某个生命周期后变了 / 对不上」的情况（死亡后失效一例）。
-    local starts = GetLiveTotemStarts()
-    if starts then
-        for _, list in ipairs({ shownBtns, allBtns }) do
-            for _, b in ipairs(list) do
-                local cd = TotemButtonMatchesStarts(b, starts)
-                if cd then
-                    if p then p._totemWhy = "cooldown time" end
-                    -- 锚 Cooldown 的父级（图标帧），别锚外层按钮：两个图腾时外层可能横跨两槽
-                    local okP, par = pcall(cd.GetParent, cd)
-                    if okP and par then return par end
-                    return b
-                end
-            end
-        end
-        return fail(("no match: btns=%d icon=%s totems=%d%s"):format(
-            #allBtns, want, #starts, tfHidden and " tfHidden" or ""))
-    end
-    return fail(("no match: btns=%d icon=%s no-totem-info%s"):format(
-        #allBtns, want, tfHidden and " tfHidden" or ""))
-end
-
 -- 按钮缓存解析（含自愈验证）：切专精/翻页后按钮可能已换成别的技能，用 GetActionInfo +
 -- 名字比对验证缓存，失效即作废重找（上游 2026-08-21 修「切专精后剩余时间滞留」）。
 -- ⚠️ 有 p.actionName 时一律用它：Forever 升级换 Rank 后存盘的 actionSpellID 可能已不存在，
 --    由 ID 反查名字会落空；名字在换 Rank 前后不变。
 local function ResolveButton(p, actionSpellID)
     local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
-    -- 图腾条目：优先图腾条（图腾生灭导致按钮重建，不做缓存校验，每次重新按图标找）
-    if p.onTotemBar then
-        p.button = FindTotemButtonForSpell(actionSpellID, p)   -- 传 p：失败原因记到 p._totemWhy
-        -- 图腾条上暂时没有该图腾（没放 / 时间到）→ 不再回退动作条：
-        -- 回退会让标记在「动作条技能按钮」和「图腾条」之间来回跳，反而更乱
-        return p.button
-    end
     if p.button and p.button.action ~= nil then
         local okA, _, curSpellID = pcall(GetActionInfo, p.button.action)
         local curName = (okA and curSpellID) and C_Spell.GetSpellName(curSpellID) or nil
@@ -1467,15 +1266,6 @@ local function PositionContainer(container, btn, p)
         p._docked = nil
     end
     container:SetSize(width * r, height * r)
-    -- 边框标记的承载帧：位置每轮重锚容器 TOPLEFT（绝对坐标，不随尺寸变化），
-    -- 尺寸单独给。这样 AuraButton 被暴雪 flow layout 改成 1×1 时，
-    -- 标记不会跟着缩成一小块并滑到左上角（2026-11-12 用户实测）。
-    -- ⚠️ 尺寸要用 width * r：承载帧的父级是 AuraButton，它的缩放 = UIParent 缩放（不是图腾按钮的
-    --    缩放），所以按钮单位要乘 r 才能换算到 AuraButton 局部单位（与容器同一套换算）。
-    if p.markHost and width and height and width > 0 and height > 0 then
-        p.markHost:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-        p.markHost:SetSize(width * r, height * r)
-    end
     LayoutAuraChildren(p, width, height, r)
     return true
 end
@@ -1486,104 +1276,16 @@ end
 --   fs  → SetApplicationCount（层数，>1 才显示）
 --   glow → CDMButtonAuras 同款柔光纹理（ADD 混合），挂在 AuraButton 上随按钮显隐，
 --          不读任何存在性信号。
--- 容器与 AuraButton 只作绘图载体：必须让鼠标完全穿透。
--- 若不禁用：暴雪 AuraButton 自带鼠标处理，悬停时弹出它自己的法术 tooltip，
--- 与按钮原有的 tooltip 叠成两个框（2026-11-12 用户实测：图腾条多出一个提示框）。
--- 禁用后鼠标落到下层的真实按钮上，tooltip 只保留原本那一个。
--- depth 递归子帧：AuraButton 的图标/冷却可能挂在自己的子帧上，只关父级挡不住。
-local function MakeClickThrough(frame, depth)
-    if not frame then return end
-    for _, m in ipairs({ "EnableMouse", "EnableMouseMotion",
-                         "SetMouseClickEnabled", "SetMouseMotionEnabled" }) do
-        local fn = frame[m]
-        if fn then pcall(fn, frame, false) end
-    end
-    for _, script in ipairs({ "OnEnter", "OnLeave", "OnMouseDown", "OnMouseUp", "OnMouseWheel" }) do
-        pcall(frame.SetScript, frame, script, nil)
-    end
-    if (depth or 0) <= 0 then return end
-    local ok, kids = pcall(function() return { frame:GetChildren() } end)
-    if not ok or type(kids) ~= "table" then return end
-    for _, kid in ipairs(kids) do
-        MakeClickThrough(kid, depth - 1)
-    end
-end
-
 local function SetupAuraButton(p, btn)
     btn:SetAllPoints(p.container)
-    MakeClickThrough(btn, 2)   -- 鼠标穿透：否则多弹一个 AuraButton 自己的 tooltip
     if p.overlayOnly then
         -- 无持续时间光环（形态/瞬发开关）：不挂倒计时框与层数。
-        -- 标记样式由 p.markStyle 决定：
-        --   · 默认 = CDMButtonAuras 同款柔光（ADD 混合，自身绿 / 敌对红）；
-        --   · "border" = 四边纯色描边（Interface\\Buttons\\WHITE8X8 拉开成四条边）。
-        --     适用场景：图标本身是主体（图腾条按钮就是图腾图标），柔光会把整个图标染绿、
-        --     和图标本体混在一起；边框只框边，既清楚又不遮内容。
-        local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
-        if p.markStyle == "border" then
-            local th = B.Style.MARK_BORDER_THICKNESS
-            local o  = B.Style.MARK_BORDER_OUTSET or 0
-            -- 纯色边优先用 SetColorTexture：不依赖任何纹理资源，客户端换皮也拿不走。
-            -- ⚠️ 早先版本写死 "Interface\\Buttons\\WHITE8X8"，在这个客户端上画出来是空的
-            --    （纹理不存在或被皮肤插件隐藏），于是「链路全通但看不见边框」。
-            --    没有 SetColorTexture 的旧客户端回退纯白纹理 + 顶点色。
-            local function Paint(t)
-                if t.SetColorTexture then
-                    t:SetColorTexture(c[1], c[2], c[3], 1)
-                else
-                    t:SetTexture("Interface\\Buttons\\WHITE8X8")
-                    t:SetVertexColor(c[1], c[2], c[3], 1)
-                end
-            end
-            -- ⚠️ 边框必须画在 AuraButton 的【子帧】上，不能直接画成 AuraButton 的纹理：
-            --    同一个按钮里，子帧的层级 = 父级 + 1，永远画在父级所有纹理之上；而纹理之间的
-            --    优先级只看 sublevel。暴雪 AuraButton 自带子帧（图标框之类）在 +1，所以直接把
-            --    纹理画在 btn 上会被它盖住 —— 用户实测「绿框有时候不见」就是这个。
-            --    套两层子帧 = 父级 + 2，稳压 +1 的那层。全程不读任何帧属性（GetFrameLevel 等
-            --    在战斗中对受限帧会返回 secret），所以战斗中调用也安全。
-            -- ⚠️ 承载帧**不能** SetAllPoints(btn)：AuraButton 的尺寸会被暴雪 flow layout 异步
-            --    压成近乎 1×1（容器同样会被压），跟随它就会「绿框突然缩小、飘到左上角」
-            --    （2026-11-12 用户实测）。所以位置锚容器 TOPLEFT（那是 PositionContainer 用
-            --    绝对坐标直接设的，不随尺寸变化），尺寸由 PositionContainer 按按钮 rect 显式
-            --    写入 —— 位置与尺寸解耦，按钮自身尺寸抖动不再传导到标记上。
-            local host = CreateFrame("Frame", nil, btn)
-            if p.container then
-                host:SetPoint("TOPLEFT", p.container, "TOPLEFT", 0, 0)
-            else
-                host:SetAllPoints(btn)   -- 兜底：正常流程不会走到（容器先于 AuraButton 创建）
-            end
-            host:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
-            local inner = CreateFrame("Frame", nil, host)
-            inner:SetAllPoints(host)
-            -- { 点1, x1, y1, 点2, x2, y2, 宽, 高 }
-            -- 整条边框画在按钮【外面】：y/x 偏移取 o + th，使边框的内沿正好落在按钮外缘之外，
-            -- 既不遮图标，也不会被按钮自带的描边压住。两个锚点把纹理拉到满长，另一维手动给定。
-            local off = o + th
-            local edges = {
-                { "TOPLEFT",     -off,  off, "TOPRIGHT",      off,  off, nil, th },  -- 上
-                { "BOTTOMLEFT",  -off, -off, "BOTTOMRIGHT",   off, -off, nil, th },  -- 下
-                { "TOPLEFT",     -off,  off, "BOTTOMLEFT",   -off, -off, th,  nil }, -- 左
-                { "TOPRIGHT",     off,  off, "BOTTOMRIGHT",   off, -off, th,  nil }, -- 右
-            }
-            local list = {}
-            for _, e in ipairs(edges) do
-                local t = inner:CreateTexture(nil, "OVERLAY", nil, 7)
-                Paint(t)
-                t:SetPoint(e[1], inner, e[1], e[2], e[3])
-                t:SetPoint(e[4], inner, e[4], e[5], e[6])
-                if e[8] then t:SetHeight(e[8]) end
-                if e[7] then t:SetWidth(e[7]) end
-                list[#list + 1] = t
-            end
-            p.borderTex = list
-            p.markHost = host
-            p.auraButton = btn
-            return
-        end
+        -- 存在标记与其他光环完全一致——CDMButtonAuras 同款柔光材质（ADD 混合，自身=绿）。
         local glow = btn:CreateTexture(nil, "ARTWORK")
         glow:SetAllPoints(btn)
         glow:SetTexture(B.OVERLAY_TEXTURE)
         glow:SetBlendMode("ADD")
+        local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
         glow:SetVertexColor(c[1], c[2], c[3], B.Style.GLOW_ALPHA)
         p.glow = glow
         p.auraButton = btn
@@ -1629,10 +1331,6 @@ local function EnsureContainerForGroup(p)
     local filter = p.filter or ((p.unit == "target") and "HARMFUL|PLAYER" or "HELPFUL|PLAYER")
 
     local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
-    MakeClickThrough(container, 0)   -- 容器本身也不吃鼠标（否则会吞掉底下按钮的 tooltip）
-    -- 标记（尤其 markStyle="border"）要画到按钮/容器边界【之外】：
-    -- 容器尺寸就等于按钮尺寸，一旦容器裁剪子级，边框外侧会被切掉 → 看起来「边框时有时无」。
-    pcall(container.SetClipsChildren, container, false)
     container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(1000)
     container:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
@@ -1748,20 +1446,12 @@ local function UpdateAuraGroup(p)
     if not btn then
         if not IsPlayerSpell(p.actionSpellID) then
             DeactivateGroup(p)
-        elseif p.onTotemBar and p._rectL then
-            -- 图腾条：认不出按钮 ≠ 图腾没了。重建瞬间、Ellesmere 重排、战斗中读不到 rect，
-            -- 都会让识别失败一次。一旦定位成功过就【保持原位】、不停靠——
-            -- 停靠会让绿框整块消失（用户实测「有时候会消失」）；
-            -- 真正的「图腾没了」由暴雪 AuraButton 自己显隐表达（光环消失 → 按钮隐藏）。
-            return
         else
             DockContainer(container, p)
         end
         return
     end
     if not PositionContainer(container, btn, p) then
-        -- 同上：已经定位过就留在原地，不要因为一次读不到 rect 就把标记甩到屏幕外
-        if p.onTotemBar and p._rectL then return end
         DockContainer(container, p)
         return
     end
@@ -2006,11 +1696,8 @@ local function RebuildGroups()
     -- key 以【技能名】为基准（而非 spellID）：Forever 升级换 Rank 后施放技能的 spellID 变了，
     -- 用名字才能复用同一个容器（否则每升一级就多一个停泊屏幕外的旧容器）。
     -- auraIDs 是集合：一条绑定可以同时追踪同名技能的各等级光环 ID。
-    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly, onTotemBar, markStyle, keySuffix)
-        -- keySuffix：同一条预设要同时挂到两个地方时（图腾条 + 动作条），两者 unit/filter/技能名
-        -- 完全相同，不加后缀会被并成同一个组、后写的那份覆盖前一份（也就只剩一个落点）。
+    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly)
         local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionName or actionSpellID)
-            .. (keySuffix or "")
         local g = merged[key]
         if not g then
             g = oldByKey[key]
@@ -2024,8 +1711,6 @@ local function RebuildGroups()
             g.key = key
             g.unit, g.filter, g.actionSpellID = unit, filter, actionSpellID
             g.actionName = actionName
-            g.onTotemBar = onTotemBar or nil   -- 每轮重建覆盖，旧组复用时不残留
-            g.markStyle = markStyle or nil     -- 同上："border" = 四边描边，nil = 柔光
             merged[key] = g
             order[#order + 1] = g
         end
@@ -2148,14 +1833,7 @@ local function RebuildGroups()
                 local filter = e.filter or (unit == "target" and "HARMFUL|PLAYER" or "HELPFUL")
                 -- 一个 ID 都没展开到（还没学 / 名字对不上）→ 不建组：空组只会白占一个容器
                 if next(ids) then
-                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, e.onTotemBar, e.markStyle)
-                    -- alsoActionBar：同一条预设再挂一份到动作条技能按钮上。
-                    -- 两份各自独立（key 加 "@bar" 后缀区分）：图腾条那份画绿框（markStyle），
-                    -- 这份不传 markStyle → 走默认柔光；也不传 onTotemBar → 去动作条找按钮。
-                    -- 用途：既想在图腾条上看「在不在范围」，又想保留动作条按钮上原来的绿柔光。
-                    if e.onTotemBar and e.alsoActionBar then
-                        addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, nil, nil, "@bar")
-                    end
+                    addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly)
                 end
             end
         end
@@ -2292,8 +1970,6 @@ evFrame:RegisterUnitEvent("UNIT_PET", "player")     -- 宠物召唤/解散/替�
 evFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")  -- 切专精：换绑定槽 + 重建
 evFrame:RegisterEvent("SPELLS_CHANGED")             -- 法术书变化（学新技能 / 新 Rank）：名字索引失效 + 重建
 evFrame:RegisterEvent("PLAYER_LEVEL_UP")            -- 升级（Forever 会学到同一技能的新 Rank）
-evFrame:RegisterEvent("PLAYER_DEAD")                -- 死亡：图腾条/动作条按钮会被重建，清缓存重解析
-evFrame:RegisterEvent("PLAYER_ALIVE")               -- 复活：同上，且图腾条可能换了父级/位置
 
 evFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_ENTERING_WORLD" then
@@ -2311,13 +1987,6 @@ evFrame:SetScript("OnEvent", function(_, event)
         C_Timer.After(5, function() pcall(ScanLearnableAuras) end)
         -- 低频 ticker：类型 A 重定位/字体 + 类型 B 清理（容器内容由暴雪自行驱动）
         C_Timer.NewTicker(1, Tick)
-    elseif event == "PLAYER_DEAD" or event == "PLAYER_ALIVE" then
-        -- 死亡 / 复活：图腾条与动作条按钮都会被重建，而 p.button、容器位置、边框承载帧
-        -- 都可能还指着旧的。清掉按钮缓存并多刷两轮（重生/复活后的布局是异步的）。
-        -- 2026-11-12 用户实测：死一次后图腾绿框再也不出现，/reload 才恢复。
-        InvalidateButtons()
-        C_Timer.After(0.2, function() InvalidateButtons(); RefreshAll() end)
-        C_Timer.After(1.0, function() InvalidateButtons(); RefreshAll() end)
     elseif actionbarEvents[event] then
         InvalidateButtons()
         C_Timer.After(0.1, function() InvalidateButtons(); RefreshAll() end)
@@ -2406,77 +2075,17 @@ function B.DumpGroupsVerbose()
         local auras = {}
         for id in pairs(p.auraIDs or {}) do auras[#auras + 1] = tostring(id) end
         table.sort(auras)
-        -- 按钮可能匿名（图腾条按钮 name=nil）：区分「没解析到按钮」和「解析到了但没名字」，
-        -- 否则两种情况都打印 nil，排查时分不清。
-        local btnText
-        if p.button then
-            local nm = p.button:GetName()
-            btnText = nm and nm or ("unnamed " .. tostring(p.button:GetObjectType()))
-        else
-            btnText = "nil"
-        end
-        -- 容器位置：停靠屏外时坐标会远离屏幕，配合 _docked 一起看。
-        -- ⚠️ 坐标一律取整：浮点全精度会把单行撑到两百多字符，聊天框复制出来会失真。
-        local rect = ""
-        if p.container then
-            local okL, l = pcall(p.container.GetLeft, p.container)
-            local okT, t = pcall(p.container.GetTop, p.container)
-            local okW, w = pcall(p.container.GetWidth, p.container)
-            local okH, h = pcall(p.container.GetHeight, p.container)
-            rect = (" rect=%.0f,%.0f %.0fx%.0f"):format(
-                tonumber(okL and l) or 0, tonumber(okT and t) or 0,
-                tonumber(okW and w) or 0, tonumber(okH and h) or 0)
-        end
-        -- AuraButton 是否已创建、尺寸多少：overlayOnly 边框画在它身上，尺寸为 0 或 nil 就是没建起来
-        local ab = "nil"
-        if p.auraButton then
-            local okS, w, h = pcall(p.auraButton.GetSize, p.auraButton)
-            local okSh, sh = pcall(p.auraButton.IsShown, p.auraButton)
-            ab = ("%s %.0fx%.0f"):format(tostring(okSh and sh),
-                tonumber(okS and w) or 0, tonumber(okS and h) or 0)
-        end
-        -- 边框纹理：数量 + 第一条的尺寸。「画了但看不见」时看这里——
-        -- 尺寸为 0 说明锚点没拉开，数量为 0 说明根本没走到 border 分支
-        local bx = ""
-        if p.borderTex and p.borderTex[1] then
-            local t1 = p.borderTex[1]
-            local okW, w = pcall(t1.GetWidth, t1)
-            local okH, h = pcall(t1.GetHeight, t1)
-            local okA, a = pcall(t1.GetAlpha, t1)
-            bx = (" bx=%d %.0fx%.0f a=%s"):format(#p.borderTex,
-                tonumber(okW and w) or 0, tonumber(okH and h) or 0, tostring(okA and a))
-        end
-        -- 图腾组额外记一笔按钮识别的结果（死亡后失效的排查全靠它）：
-        -- 「matched by ...」= 认到了；「TotemFrame hidden」「no match: btns=...」= 卡在哪一步
-        local tw = p.onTotemBar and (" tw=" .. tostring(p._totemWhy or "-")) or ""
-        out[#out + 1] = ("g%d %s/%s sp=%s n=%s a=[%s] totem=%s mark=%s ov=%s c=%s%s btn=%s ab=%s%s fail=%s%s"):format(
+        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s name=%s auras=[%s] container=%s btn=%s initFailed=%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
             tostring(p.actionName or "-"),
             table.concat(auras, ","),
-            tostring(p.onTotemBar or false),
-            tostring(p.markStyle or "-"),
-            tostring(p.overlayOnly or false),
-            p.container and (p._docked and "dock" or "show") or "nil",
-            rect, btnText, ab, bx,
-            tostring(p._initFailed), tw)
+            p.container and (p._docked and "docked" or "shown") or "nil",
+            p.button and p.button:GetName() or "nil",
+            tostring(p._initFailed))
     end
     for i, p in ipairs(B.enchants) do
-        local ids, icons = {}, {}
-        for id in pairs(p.enchantIDs or {}) do ids[#ids + 1] = tostring(id) end
-        for ic in pairs(p.imbueIcons or {}) do icons[#icons + 1] = tostring(ic) end
-        table.sort(ids)
-        table.sort(icons)
-        -- 只读当前缓存，不调用 ResolveButton（那会写 p.button，诊断不该改状态）
-        local known = "?"
-        if p.actionSpellID then
-            local okK, k = pcall(IsPlayerSpell, p.actionSpellID)
-            known = tostring(okK and k)
-        end
-        out[#out + 1] = ("e%d sp=%s n=%s ids=[%s] ico=[%s] known=%s btn=%s ov=%s"):format(
-            i, tostring(p.actionSpellID), tostring(p.actionName or "-"),
-            table.concat(ids, ","), table.concat(icons, ","),
-            known,
-            p.button and "yes" or "nil",
+        out[#out + 1] = ("enchant %d: id=%s spell=%s overlay=%s"):format(
+            i, tostring(p.enchantID), tostring(p.actionSpellID),
             p.overlay and (p.overlay:IsShown() and "shown" or "hidden") or "nil")
     end
     return out
@@ -2601,151 +2210,6 @@ function B.DumpWeaponEnchants()
     return out
 end
 
--- =========================================================
--- 图腾条诊断（/babu totem）
--- =========================================================
--- 目的：让图腾 buff（大地之力 8076 / 石肤术 8072）的「在范围内」标记挂到图腾条的
--- 对应按钮上，而不是动作条技能按钮。可行性取决于两件事，都得实测：
---   ① TotemFrame 的子按钮结构（按钮名 / 是否有 .Icon / 是否随图腾显隐）
---   ② 按钮的图标或名字能否与「施放那个图腾的法术」对上（本命令把两边图标一起打出来比对）
--- 判定原理（不依赖任何未知 API）：玩家身上有该图腾的 buff = 处于覆盖范围内；
--- 图腾 buff 没有持续时间，所以这个通道只需要「有 / 无」，不读任何时长。
-function B.DumpTotemBar()
-    local out = {}
-    local tf = _G.TotemFrame
-    if tf then
-        local okS, shown = pcall(tf.IsShown, tf)
-        local okR, l, b, w, h = pcall(tf.GetRect, tf)
-        local okP, parent = pcall(tf.GetParent, tf)
-        out[#out + 1] = ("TotemFrame: shown=%s children=%d rect=%s,%s %sx%s parent=%s"):format(
-            tostring(shown), select("#", tf:GetChildren()),
-            tostring(okR and l), tostring(okR and b), tostring(okR and w), tostring(okR and h),
-            tostring(okP and parent and (parent:GetName() or parent:GetObjectType())))
-        -- 递归四层：图腾条真正的图标按钮不一定直接挂在 TotemFrame 下
-        local function dump(frame, depth, prefix)
-            for _, child in ipairs({ frame:GetChildren() }) do
-                local okType, otype = pcall(child.GetObjectType, child)
-                local okSh, cshown = pcall(child.IsShown, child)
-                local iconTex
-                if child.Icon then
-                    local okT, t = pcall(child.Icon.GetTexture, child.Icon)
-                    if okT then iconTex = tostring(t) end
-                end
-                -- 图标可能直接是按钮的子纹理（Ellesmere 的布局代码依赖 .Icon，但真实按钮未必有）
-                -- ⚠️ GetRegions() 返回【变长参数】不是 table：必须用 {} 包起来，
-                --    直接 `local ok, r = pcall(f)` 只接住第一个 region，会永远判空。
-                local texList = {}
-                if child.GetRegions then
-                    local okG, regions = pcall(function() return { child:GetRegions() } end)
-                    if okG and type(regions) == "table" then
-                        for _, r in ipairs(regions) do
-                            if r.GetTexture then
-                                local okT, t = pcall(r.GetTexture, r)
-                                if okT and t then texList[#texList + 1] = tostring(t) end
-                            end
-                        end
-                    end
-                end
-                -- Cooldown 的时间：备用的「按钮 ↔ 图腾槽」匹配手段（与 GetTotemInfo 的 start/dur 比对）
-                if otype == "Cooldown" then
-                    local okC, cs, cd = pcall(child.GetCooldownTimes, child)
-                    if okC then
-                        texList[#texList + 1] = ("cd=%s/%s"):format(tostring(cs), tostring(cd))
-                    end
-                end
-                -- 位置：判断按钮是「固定槽位」还是「连续排列」
-                local okR, l, b, w, h = pcall(child.GetRect, child)
-                out[#out + 1] = ("%schild: name=%s type=%s shown=%s rect=%s,%s %sx%s iconField=%s regions=[%s]"):format(
-                    prefix, tostring(child:GetName()), tostring(otype), tostring(cshown),
-                    tostring(okR and l), tostring(okR and b), tostring(okR and w), tostring(okR and h),
-                    tostring(iconTex), table.concat(texList, " "))
-                -- mixin 可能暴露槽位/法术：frame 是 userdata，只能从 metatable.__index 表里找
-                if child.GetObjectType and otype == "Button" and depth == 2 then
-                    local okM, mt = pcall(getmetatable, child)
-                    local keys = {}
-                    if okM and type(mt) == "table" then
-                        for _, k in ipairs({ "__index", "mixin", "__typename" }) do
-                            keys[#keys + 1] = k .. "=" .. tostring(mt[k])
-                        end
-                        local idx = mt.__index
-                        if type(idx) == "table" then
-                            local names = {}
-                            for k in pairs(idx) do names[#names + 1] = tostring(k) end
-                            table.sort(names)
-                            keys[#keys + 1] = "indexKeys=[" .. table.concat(names, ",") .. "]"
-                        end
-                    end
-                    out[#out + 1] = prefix .. "  mt: " .. table.concat(keys, " ")
-                end
-                if depth > 1 then
-                    dump(child, depth - 1, prefix .. "  ")
-                end
-            end
-        end
-        dump(tf, 4, "  ")
-    else
-        out[#out + 1] = "TotemFrame: 不存在"
-    end
-
-    -- GetTotemInfo(slot)：经典 API，返回 haveTotem, name, startTime, duration, icon
-    -- slot 顺序 = 火 1 / 土 2 / 水 3 / 空气 4（实测大地之力图腾落在 2）
-    if type(GetTotemInfo) == "function" then
-        for slot = 1, 4 do
-            local ok, have, name, startTime, duration, icon = pcall(GetTotemInfo, slot)
-            if ok then
-                out[#out + 1] = ("  GetTotemInfo(%d): have=%s name=%s start=%s dur=%s icon=%s"):format(
-                    slot, tostring(have), tostring(name), tostring(startTime),
-                    tostring(duration), tostring(icon))
-            else
-                out[#out + 1] = ("  GetTotemInfo(%d): error %s"):format(slot, tostring(have))
-            end
-        end
-    else
-        out[#out + 1] = "GetTotemInfo: 不存在"
-    end
-
-    -- 施放技能的图标：与上面 child 的 icon 比对，相同就说明「能按图标认出是哪个图腾」
-    if C_Spell and C_Spell.GetSpellTexture then
-        for _, id in ipairs({ 8075, 8071 }) do   -- 大地之力图腾 / 石肤图腾
-            local ok, tex = pcall(C_Spell.GetSpellTexture, id)
-            out[#out + 1] = ("  spellIcon(%d)=%s"):format(id, ok and tostring(tex) or "error")
-        end
-    end
-
-    -- 另一条可能的「图腾条」：Call of the Elements（MultiCastActionButton1..12）
-    local mc = {}
-    for i = 1, 12 do
-        local btn = _G["MultiCastActionButton" .. i]
-        if btn then
-            local okSh, s = pcall(btn.IsShown, btn)
-            local t
-            if btn.Icon then
-                local okT, v = pcall(btn.Icon.GetTexture, btn.Icon)
-                if okT then t = tostring(v) end
-            end
-            if s or t then
-                mc[#mc + 1] = ("%d=%s%s"):format(i, s and "shown" or "hidden", t and ("/" .. t) or "")
-            end
-        end
-    end
-    out[#out + 1] = "MultiCastActionButton: " .. (#mc > 0 and table.concat(mc, " ") or "none")
-
-    -- 玩家身上是否有对应 buff（脱战才扫；战斗中本命令本来就不响应）
-    local seen = B.GetAuraSeen()
-    out[#out + 1] = ("  auraSeen 大地之力=[%s] 石肤术=[%s]"):format(
-        (function()
-            local ids = {}
-            for id in pairs(seen["大地之力"] or {}) do ids[#ids + 1] = tostring(id) end
-            return table.concat(ids, ",")
-        end)(),
-        (function()
-            local ids = {}
-            for id in pairs(seen["石肤术"] or {}) do ids[#ids + 1] = tostring(id) end
-            return table.concat(ids, ",")
-        end)())
-    return out
-end
-
 SLASH_EASYBUTTONAURABYUNIT1 = "/babu"
 SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
     msg = tostring(msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
@@ -2776,13 +2240,6 @@ SlashCmdList["EASYBUTTONAURABYUNIT"] = function(msg)
         if InCombatLockdown() then return end
         RebuildGroups()   -- 先重建一遍，转储的就是当前真实状态
         for _, line in ipairs(B.DumpGroupsVerbose()) do
-            print("|cffE8BC75[babu]|r " .. line)
-        end
-        return
-    end
-    if msg == "totem" then
-        if InCombatLockdown() then return end
-        for _, line in ipairs(B.DumpTotemBar()) do
             print("|cffE8BC75[babu]|r " .. line)
         end
         return
