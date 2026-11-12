@@ -167,7 +167,10 @@ B.Style = {
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
     GLOW_ALPHA       = 0.5,
     -- 边框标记（markStyle="border"）：四边描边的粗细（像素，UI 单位）
-    MARK_BORDER_THICKNESS = 2,
+    MARK_BORDER_THICKNESS = 4,
+    -- 边框距离按钮边缘的距离：0 = 压在按钮边缘上（会被按钮自己的子帧/贴图盖住），
+    -- >0 = 整条边框画在按钮【外面】，图标一点不被遮，也躲开按钮自带描边的覆盖。
+    MARK_BORDER_OUTSET    = 1,
 }
 
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
@@ -1397,6 +1400,7 @@ local function SetupAuraButton(p, btn)
         local c = (p.unit == "target") and B.Style.GLOW_ENEMY or B.Style.GLOW_SELF
         if p.markStyle == "border" then
             local th = B.Style.MARK_BORDER_THICKNESS
+            local o  = B.Style.MARK_BORDER_OUTSET or 0
             -- 纯色边优先用 SetColorTexture：不依赖任何纹理资源，客户端换皮也拿不走。
             -- ⚠️ 早先版本写死 "Interface\\Buttons\\WHITE8X8"，在这个客户端上画出来是空的
             --    （纹理不存在或被皮肤插件隐藏），于是「链路全通但看不见边框」。
@@ -1409,26 +1413,38 @@ local function SetupAuraButton(p, btn)
                     t:SetVertexColor(c[1], c[2], c[3], 1)
                 end
             end
-            -- { 锚点, 锚点2, 宽, 高 }：两个锚点把纹理拉满整条边，另一个尺寸手动给定
+            -- ⚠️ 边框必须画在 AuraButton 的【子帧】上，不能直接画成 AuraButton 的纹理：
+            --    同一个按钮里，子帧的层级 = 父级 + 1，永远画在父级所有纹理之上；而纹理之间的
+            --    优先级只看 sublevel。暴雪 AuraButton 自带子帧（图标框之类）在 +1，所以直接把
+            --    纹理画在 btn 上会被它盖住 —— 用户实测「绿框有时候不见」就是这个。
+            --    套两层子帧 = 父级 + 2，稳压 +1 的那层。全程不读任何帧属性（GetFrameLevel 等
+            --    在战斗中对受限帧会返回 secret），所以战斗中调用也安全。
+            local host = CreateFrame("Frame", nil, btn)
+            host:SetAllPoints(btn)
+            local inner = CreateFrame("Frame", nil, host)
+            inner:SetAllPoints(host)
+            -- { 点1, x1, y1, 点2, x2, y2, 宽, 高 }
+            -- 整条边框画在按钮【外面】：y/x 偏移取 o + th，使边框的内沿正好落在按钮外缘之外，
+            -- 既不遮图标，也不会被按钮自带的描边压住。两个锚点把纹理拉到满长，另一维手动给定。
+            local off = o + th
             local edges = {
-                { "TOPLEFT", "TOPRIGHT", nil, th },        -- 上
-                { "BOTTOMLEFT", "BOTTOMRIGHT", nil, th },  -- 下
-                { "TOPLEFT", "BOTTOMLEFT", th, nil },      -- 左
-                { "TOPRIGHT", "BOTTOMRIGHT", th, nil },    -- 右
+                { "TOPLEFT",     -off,  off, "TOPRIGHT",      off,  off, nil, th },  -- 上
+                { "BOTTOMLEFT",  -off, -off, "BOTTOMRIGHT",   off, -off, nil, th },  -- 下
+                { "TOPLEFT",     -off,  off, "BOTTOMLEFT",   -off, -off, th,  nil }, -- 左
+                { "TOPRIGHT",     off,  off, "BOTTOMRIGHT",   off, -off, th,  nil }, -- 右
             }
             local list = {}
             for _, e in ipairs(edges) do
-                -- ⚠️ 第四个参数 sublevel 必须给到顶（7）：AuraButton 是暴雪控件，它自己的
-                --    图标/冷却纹理也在 OVERLAY 层，同 sublevel 时后画的会被压住 → 边框看不见。
-                local t = btn:CreateTexture(nil, "OVERLAY", nil, 7)
+                local t = inner:CreateTexture(nil, "OVERLAY", nil, 7)
                 Paint(t)
-                t:SetPoint(e[1], btn, e[1], 0, 0)
-                t:SetPoint(e[2], btn, e[2], 0, 0)
-                if e[4] then t:SetHeight(e[4]) end
-                if e[3] then t:SetWidth(e[3]) end
+                t:SetPoint(e[1], inner, e[1], e[2], e[3])
+                t:SetPoint(e[4], inner, e[4], e[5], e[6])
+                if e[8] then t:SetHeight(e[8]) end
+                if e[7] then t:SetWidth(e[7]) end
                 list[#list + 1] = t
             end
             p.borderTex = list
+            p.markHost = host
             p.auraButton = btn
             return
         end
@@ -1482,6 +1498,9 @@ local function EnsureContainerForGroup(p)
 
     local container = CreateFrame("AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
     MakeClickThrough(container, 0)   -- 容器本身也不吃鼠标（否则会吞掉底下按钮的 tooltip）
+    -- 标记（尤其 markStyle="border"）要画到按钮/容器边界【之外】：
+    -- 容器尺寸就等于按钮尺寸，一旦容器裁剪子级，边框外侧会被切掉 → 看起来「边框时有时无」。
+    pcall(container.SetClipsChildren, container, false)
     container:SetFrameStrata("MEDIUM")
     container:SetFrameLevel(1000)
     container:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
