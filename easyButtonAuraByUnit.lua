@@ -2202,38 +2202,54 @@ function B.DumpGroupsVerbose()
         else
             btnText = "nil"
         end
-        -- 容器位置：停靠屏外时 _rectL 会是一个很大的负值或 nil，配合 _docked 一起看
+        -- 容器位置：停靠屏外时坐标会远离屏幕，配合 _docked 一起看。
+        -- ⚠️ 坐标一律取整：浮点全精度会把单行撑到两百多字符，聊天框复制出来会失真。
         local rect = ""
         if p.container then
             local okL, l = pcall(p.container.GetLeft, p.container)
             local okT, t = pcall(p.container.GetTop, p.container)
             local okW, w = pcall(p.container.GetWidth, p.container)
             local okH, h = pcall(p.container.GetHeight, p.container)
-            rect = (" rect=%s,%s %sx%s"):format(
-                tostring(okL and l), tostring(okT and t),
-                tostring(okW and w), tostring(okH and h))
+            rect = (" rect=%.0f,%.0f %.0fx%.0f"):format(
+                tonumber(okL and l) or 0, tonumber(okT and t) or 0,
+                tonumber(okW and w) or 0, tonumber(okH and h) or 0)
         end
         -- AuraButton 是否已创建、尺寸多少：overlayOnly 边框画在它身上，尺寸为 0 或 nil 就是没建起来
         local ab = "nil"
         if p.auraButton then
             local okS, w, h = pcall(p.auraButton.GetSize, p.auraButton)
             local okSh, sh = pcall(p.auraButton.IsShown, p.auraButton)
-            ab = ("%s %sx%s"):format(tostring(okSh and sh), tostring(okS and w), tostring(okS and h))
+            ab = ("%s %.0fx%.0f"):format(tostring(okSh and sh),
+                tonumber(okS and w) or 0, tonumber(okS and h) or 0)
         end
-        out[#out + 1] = ("group %d: unit=%s filter=%s spell=%s name=%s auras=[%s] totem=%s mark=%s overlay=%s container=%s%s btn=%s auraBtn=%s initFailed=%s"):format(
+        out[#out + 1] = ("g%d %s/%s sp=%s n=%s a=[%s] totem=%s mark=%s ov=%s c=%s%s btn=%s ab=%s fail=%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
             tostring(p.actionName or "-"),
             table.concat(auras, ","),
             tostring(p.onTotemBar or false),
             tostring(p.markStyle or "-"),
             tostring(p.overlayOnly or false),
-            p.container and (p._docked and "docked" or "shown") or "nil",
+            p.container and (p._docked and "dock" or "show") or "nil",
             rect, btnText, ab,
             tostring(p._initFailed))
     end
     for i, p in ipairs(B.enchants) do
-        out[#out + 1] = ("enchant %d: id=%s spell=%s overlay=%s"):format(
-            i, tostring(p.enchantID), tostring(p.actionSpellID),
+        local ids, icons = {}, {}
+        for id in pairs(p.enchantIDs or {}) do ids[#ids + 1] = tostring(id) end
+        for ic in pairs(p.imbueIcons or {}) do icons[#icons + 1] = tostring(ic) end
+        table.sort(ids)
+        table.sort(icons)
+        -- 只读当前缓存，不调用 ResolveButton（那会写 p.button，诊断不该改状态）
+        local known = "?"
+        if p.actionSpellID then
+            local okK, k = pcall(IsPlayerSpell, p.actionSpellID)
+            known = tostring(okK and k)
+        end
+        out[#out + 1] = ("e%d sp=%s n=%s ids=[%s] ico=[%s] known=%s btn=%s ov=%s"):format(
+            i, tostring(p.actionSpellID), tostring(p.actionName or "-"),
+            table.concat(ids, ","), table.concat(icons, ","),
+            known,
+            p.button and "yes" or "nil",
             p.overlay and (p.overlay:IsShown() and "shown" or "hidden") or "nil")
     end
     return out
