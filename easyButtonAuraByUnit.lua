@@ -167,10 +167,10 @@ B.Style = {
     GLOW_ENEMY       = { 1.00, 0.00, 0.00 },                    -- 柔光（敌对目标）：红
     GLOW_ALPHA       = 0.5,
     -- 边框标记（markStyle="border"）：四边描边的粗细（像素，UI 单位）
-    MARK_BORDER_THICKNESS = 4,
-    -- 边框距离按钮边缘的距离：0 = 压在按钮边缘上（会被按钮自己的子帧/贴图盖住），
-    -- >0 = 整条边框画在按钮【外面】，图标一点不被遮，也躲开按钮自带描边的覆盖。
-    MARK_BORDER_OUTSET    = 1,
+    MARK_BORDER_THICKNESS = 3,
+    -- 边框距离按钮边缘的距离：0 = 贴着按钮边缘画（边框整体在按钮外侧 0~thickness 像素），
+    -- >0 = 再往外留一段空隙。太大会显得框和图标脱开，1 已是极限。
+    MARK_BORDER_OUTSET    = 0,
 }
 
 B.OVERLAY_TEXTURE = "Interface\\AddOns\\" .. B.ADDON_NAME .. "\\Textures\\Overlay"
@@ -1354,6 +1354,15 @@ local function PositionContainer(container, btn, p)
         p._docked = nil
     end
     container:SetSize(width * r, height * r)
+    -- 边框标记的承载帧：位置每轮重锚容器 TOPLEFT（绝对坐标，不随尺寸变化），
+    -- 尺寸单独给。这样 AuraButton 被暴雪 flow layout 改成 1×1 时，
+    -- 标记不会跟着缩成一小块并滑到左上角（2026-11-12 用户实测）。
+    -- ⚠️ 尺寸要用 width * r：承载帧的父级是 AuraButton，它的缩放 = UIParent 缩放（不是图腾按钮的
+    --    缩放），所以按钮单位要乘 r 才能换算到 AuraButton 局部单位（与容器同一套换算）。
+    if p.markHost and width and height and width > 0 and height > 0 then
+        p.markHost:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+        p.markHost:SetSize(width * r, height * r)
+    end
     LayoutAuraChildren(p, width, height, r)
     return true
 end
@@ -1419,8 +1428,18 @@ local function SetupAuraButton(p, btn)
             --    纹理画在 btn 上会被它盖住 —— 用户实测「绿框有时候不见」就是这个。
             --    套两层子帧 = 父级 + 2，稳压 +1 的那层。全程不读任何帧属性（GetFrameLevel 等
             --    在战斗中对受限帧会返回 secret），所以战斗中调用也安全。
+            -- ⚠️ 承载帧**不能** SetAllPoints(btn)：AuraButton 的尺寸会被暴雪 flow layout 异步
+            --    压成近乎 1×1（容器同样会被压），跟随它就会「绿框突然缩小、飘到左上角」
+            --    （2026-11-12 用户实测）。所以位置锚容器 TOPLEFT（那是 PositionContainer 用
+            --    绝对坐标直接设的，不随尺寸变化），尺寸由 PositionContainer 按按钮 rect 显式
+            --    写入 —— 位置与尺寸解耦，按钮自身尺寸抖动不再传导到标记上。
             local host = CreateFrame("Frame", nil, btn)
-            host:SetAllPoints(btn)
+            if p.container then
+                host:SetPoint("TOPLEFT", p.container, "TOPLEFT", 0, 0)
+            else
+                host:SetAllPoints(btn)   -- 兜底：正常流程不会走到（容器先于 AuraButton 创建）
+            end
+            host:SetSize(AURA_DEFAULT_SIZE, AURA_DEFAULT_SIZE)
             local inner = CreateFrame("Frame", nil, host)
             inner:SetAllPoints(host)
             -- { 点1, x1, y1, 点2, x2, y2, 宽, 高 }
