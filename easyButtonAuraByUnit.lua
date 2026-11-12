@@ -837,28 +837,101 @@ local function TotemButtonIcon(btn)
     return nil
 end
 
-local function FindTotemButtonForSpell(spellID)
+-- 当前活着的图腾的「开始时间」（毫秒）：图标识别失败时的备用匹配键。
+-- 实测 Cooldown:GetCooldownTimes() 的 start/dur 与 GetTotemInfo 的完全一致
+-- （24425010/300000 ↔ 24425.01/300），所以只要图腾在，时间就一定对得上。
+local function GetLiveTotemStarts()
+    if type(GetTotemInfo) ~= "function" then return nil end
+    local out
+    for slot = 1, 4 do
+        local ok, have, _, startTime, duration = pcall(GetTotemInfo, slot)
+        if ok and have and type(startTime) == "number" and type(duration) == "number"
+            and startTime > 0 and not (type(IsSecret) == "function" and IsSecret(startTime)) then
+            out = out or {}
+            out[#out + 1] = startTime * 1000
+        end
+    end
+    return out
+end
+
+-- 收集按钮子树里的 Cooldown（图腾按钮结构：Button > Frame > Cooldown）
+local function CollectCooldowns(frame, depth, out)
+    local okC, children = pcall(function() return { frame:GetChildren() } end)
+    if not okC or not children then return out end
+    for _, child in ipairs(children) do
+        local okT, otype = pcall(child.GetObjectType, child)
+        if okT and otype == "Cooldown" and child.GetCooldownTimes then
+            out[#out + 1] = child
+        end
+        if depth > 1 then CollectCooldowns(child, depth - 1, out) end
+    end
+    return out
+end
+
+-- 按钮的冷却起始时间是否对得上某个活着的图腾（±1 秒容差）
+local function TotemButtonMatchesStarts(btn, starts)
+    for _, cd in ipairs(CollectCooldowns(btn, 3, {})) do
+        local ok, s = pcall(cd.GetCooldownTimes, cd)
+        if ok and type(s) == "number"
+            and not (type(IsSecret) == "function" and IsSecret(s)) then
+            for _, start in ipairs(starts) do
+                if math.abs(s - start) < 1000 then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- 找图腾条上「某个图腾」的按钮。p 可选：只用来记录失败原因（/babu debug 打印），
+-- 死亡后失效的现场排查全靠它（2026-11-12 用户实测：死一次后绿框再也不出现，reload 才好）。
+local function FindTotemButtonForSpell(spellID, p)
+    local function fail(msg)
+        if p then p._totemWhy = msg end
+        return nil
+    end
     local tf = _G.TotemFrame
-    if not tf or not spellID then return nil end
+    if not tf or not spellID then return fail("no TotemFrame/spellID") end
     local okShow, shown = pcall(tf.IsShown, tf)
-    if okShow and not shown then return nil end
-    if not (C_Spell and C_Spell.GetSpellTexture) then return nil end
+    if okShow and not shown then return fail("TotemFrame hidden") end
+    if not (C_Spell and C_Spell.GetSpellTexture) then return fail("no GetSpellTexture") end
     local okTex, icon = pcall(C_Spell.GetSpellTexture, spellID)
-    if not okTex or not icon then return nil end
+    if not okTex or not icon then return fail("no icon for " .. tostring(spellID)) end
     local want = tostring(icon)
     local okC, children = pcall(function() return { tf:GetChildren() } end)
-    if not okC or not children then return nil end
+    if not okC or not children or #children == 0 then return fail("TotemFrame no children") end
+
+    local shownBtns = {}
     for _, btn in ipairs(children) do
         local okT, otype = pcall(btn.GetObjectType, btn)
         local okS, s = pcall(btn.IsShown, btn)
         if okT and otype == "Button" and okS and s then
             -- 快路径：.Icon（Ellesmere 接管后存在）
-            if TotemButtonIcon(btn) == want then return btn end
+            if TotemButtonIcon(btn) == want then
+                if p then p._totemWhy = "icon field" end
+                return btn
+            end
             -- 慢路径：递归找纹理（接管前的匿名结构）
-            if FrameHasTexture(btn, want, 2) then return btn end
+            if FrameHasTexture(btn, want, 2) then
+                if p then p._totemWhy = "texture scan" end
+                return btn
+            end
+            shownBtns[#shownBtns + 1] = btn
         end
     end
-    return nil
+
+    -- 备用键：图标纹理认不出来时，按 Cooldown 起始时间与 GetTotemInfo 对表。
+    -- 这条专门对付「图标纹理在某个生命周期后变了 / 对不上」的情况（死亡后失效一例）。
+    local starts = GetLiveTotemStarts()
+    if starts then
+        for _, btn in ipairs(shownBtns) do
+            if TotemButtonMatchesStarts(btn, starts) then
+                if p then p._totemWhy = "cooldown time" end
+                return btn
+            end
+        end
+        return fail(("no match: btns=%d icon=%s totems=%d"):format(#shownBtns, want, #starts))
+    end
+    return fail(("no match: btns=%d icon=%s no-totem-info"):format(#shownBtns, want))
 end
 
 -- 按钮缓存解析（含自愈验证）：切专精/翻页后按钮可能已换成别的技能，用 GetActionInfo +
@@ -869,7 +942,7 @@ local function ResolveButton(p, actionSpellID)
     local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
     -- 图腾条目：优先图腾条（图腾生灭导致按钮重建，不做缓存校验，每次重新按图标找）
     if p.onTotemBar then
-        p.button = FindTotemButtonForSpell(actionSpellID)
+        p.button = FindTotemButtonForSpell(actionSpellID, p)   -- 传 p：失败原因记到 p._totemWhy
         -- 图腾条上暂时没有该图腾（没放 / 时间到）→ 不再回退动作条：
         -- 回退会让标记在「动作条技能按钮」和「图腾条」之间来回跳，反而更乱
         return p.button
@@ -2161,6 +2234,8 @@ evFrame:RegisterUnitEvent("UNIT_PET", "player")     -- 宠物召唤/解散/替�
 evFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED")  -- 切专精：换绑定槽 + 重建
 evFrame:RegisterEvent("SPELLS_CHANGED")             -- 法术书变化（学新技能 / 新 Rank）：名字索引失效 + 重建
 evFrame:RegisterEvent("PLAYER_LEVEL_UP")            -- 升级（Forever 会学到同一技能的新 Rank）
+evFrame:RegisterEvent("PLAYER_DEAD")                -- 死亡：图腾条/动作条按钮会被重建，清缓存重解析
+evFrame:RegisterEvent("PLAYER_ALIVE")               -- 复活：同上，且图腾条可能换了父级/位置
 
 evFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_ENTERING_WORLD" then
@@ -2178,6 +2253,13 @@ evFrame:SetScript("OnEvent", function(_, event)
         C_Timer.After(5, function() pcall(ScanLearnableAuras) end)
         -- 低频 ticker：类型 A 重定位/字体 + 类型 B 清理（容器内容由暴雪自行驱动）
         C_Timer.NewTicker(1, Tick)
+    elseif event == "PLAYER_DEAD" or event == "PLAYER_ALIVE" then
+        -- 死亡 / 复活：图腾条与动作条按钮都会被重建，而 p.button、容器位置、边框承载帧
+        -- 都可能还指着旧的。清掉按钮缓存并多刷两轮（重生/复活后的布局是异步的）。
+        -- 2026-11-12 用户实测：死一次后图腾绿框再也不出现，/reload 才恢复。
+        InvalidateButtons()
+        C_Timer.After(0.2, function() InvalidateButtons(); RefreshAll() end)
+        C_Timer.After(1.0, function() InvalidateButtons(); RefreshAll() end)
     elseif actionbarEvents[event] then
         InvalidateButtons()
         C_Timer.After(0.1, function() InvalidateButtons(); RefreshAll() end)
@@ -2306,7 +2388,10 @@ function B.DumpGroupsVerbose()
             bx = (" bx=%d %.0fx%.0f a=%s"):format(#p.borderTex,
                 tonumber(okW and w) or 0, tonumber(okH and h) or 0, tostring(okA and a))
         end
-        out[#out + 1] = ("g%d %s/%s sp=%s n=%s a=[%s] totem=%s mark=%s ov=%s c=%s%s btn=%s ab=%s%s fail=%s"):format(
+        -- 图腾组额外记一笔按钮识别的结果（死亡后失效的排查全靠它）：
+        -- 「matched by ...」= 认到了；「TotemFrame hidden」「no match: btns=...」= 卡在哪一步
+        local tw = p.onTotemBar and (" tw=" .. tostring(p._totemWhy or "-")) or ""
+        out[#out + 1] = ("g%d %s/%s sp=%s n=%s a=[%s] totem=%s mark=%s ov=%s c=%s%s btn=%s ab=%s%s fail=%s%s"):format(
             i, tostring(p.unit), tostring(p.filter), tostring(p.actionSpellID),
             tostring(p.actionName or "-"),
             table.concat(auras, ","),
@@ -2315,7 +2400,7 @@ function B.DumpGroupsVerbose()
             tostring(p.overlayOnly or false),
             p.container and (p._docked and "dock" or "show") or "nil",
             rect, btnText, ab, bx,
-            tostring(p._initFailed))
+            tostring(p._initFailed), tw)
     end
     for i, p in ipairs(B.enchants) do
         local ids, icons = {}, {}
