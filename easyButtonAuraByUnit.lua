@@ -891,8 +891,10 @@ local function FindTotemButtonForSpell(spellID, p)
     end
     local tf = _G.TotemFrame
     if not tf or not spellID then return fail("no TotemFrame/spellID") end
+    -- ⚠️ 图腾条隐藏【不】作为硬门禁：条隐藏但按钮还在的情况（刚放/刚换/战斗中）照样能认，
+    --    这里只是把状态记进诊断，让「认不出来」时的 tw= 有上下文。
     local okShow, shown = pcall(tf.IsShown, tf)
-    if okShow and not shown then return fail("TotemFrame hidden") end
+    local tfHidden = (okShow and not shown)
     if not (C_Spell and C_Spell.GetSpellTexture) then return fail("no GetSpellTexture") end
     local okTex, icon = pcall(C_Spell.GetSpellTexture, spellID)
     if not okTex or not icon then return fail("no icon for " .. tostring(spellID)) end
@@ -900,38 +902,52 @@ local function FindTotemButtonForSpell(spellID, p)
     local okC, children = pcall(function() return { tf:GetChildren() } end)
     if not okC or not children or #children == 0 then return fail("TotemFrame no children") end
 
-    local shownBtns = {}
+    local allBtns, shownBtns = {}, {}
     for _, btn in ipairs(children) do
         local okT, otype = pcall(btn.GetObjectType, btn)
-        local okS, s = pcall(btn.IsShown, btn)
-        if okT and otype == "Button" and okS and s then
-            -- 快路径：.Icon（Ellesmere 接管后存在）
-            if TotemButtonIcon(btn) == want then
-                if p then p._totemWhy = "icon field" end
-                return btn
-            end
-            -- 慢路径：递归找纹理（接管前的匿名结构）
-            if FrameHasTexture(btn, want, 2) then
-                if p then p._totemWhy = "texture scan" end
-                return btn
-            end
-            shownBtns[#shownBtns + 1] = btn
+        if okT and otype == "Button" then
+            allBtns[#allBtns + 1] = btn
+            local okS, s = pcall(btn.IsShown, btn)
+            if okS and s then shownBtns[#shownBtns + 1] = btn end
         end
+    end
+
+    -- ⚠️ IsShown 只用来「优先」，不能当硬门禁：战斗中对部分帧读不到（pcall 失败或 secret），
+    --    一旦当门禁，读失败一次就整组认不出按钮 → 绿框消失一段时间（用户实测「有时候会消失」）。
+    --    先认显示中的，再退到全部按钮。
+    local function matchIcon(list)
+        for _, btn in ipairs(list) do
+            -- 快路径：.Icon（Ellesmere 接管后存在）
+            if TotemButtonIcon(btn) == want then return btn, "icon field" end
+            -- 慢路径：递归找纹理（接管前的匿名结构）
+            if FrameHasTexture(btn, want, 2) then return btn, "texture scan" end
+        end
+        return nil
+    end
+    local btn, how = matchIcon(shownBtns)
+    if not btn then btn, how = matchIcon(allBtns) end
+    if btn then
+        if p then p._totemWhy = how end
+        return btn
     end
 
     -- 备用键：图标纹理认不出来时，按 Cooldown 起始时间与 GetTotemInfo 对表。
     -- 这条专门对付「图标纹理在某个生命周期后变了 / 对不上」的情况（死亡后失效一例）。
     local starts = GetLiveTotemStarts()
     if starts then
-        for _, btn in ipairs(shownBtns) do
-            if TotemButtonMatchesStarts(btn, starts) then
-                if p then p._totemWhy = "cooldown time" end
-                return btn
+        for _, list in ipairs({ shownBtns, allBtns }) do
+            for _, b in ipairs(list) do
+                if TotemButtonMatchesStarts(b, starts) then
+                    if p then p._totemWhy = "cooldown time" end
+                    return b
+                end
             end
         end
-        return fail(("no match: btns=%d icon=%s totems=%d"):format(#shownBtns, want, #starts))
+        return fail(("no match: btns=%d icon=%s totems=%d%s"):format(
+            #allBtns, want, #starts, tfHidden and " tfHidden" or ""))
     end
-    return fail(("no match: btns=%d icon=%s no-totem-info"):format(#shownBtns, want))
+    return fail(("no match: btns=%d icon=%s no-totem-info%s"):format(
+        #allBtns, want, tfHidden and " tfHidden" or ""))
 end
 
 -- 按钮缓存解析（含自愈验证）：切专精/翻页后按钮可能已换成别的技能，用 GetActionInfo +
@@ -1708,12 +1724,20 @@ local function UpdateAuraGroup(p)
     if not btn then
         if not IsPlayerSpell(p.actionSpellID) then
             DeactivateGroup(p)
+        elseif p.onTotemBar and p._rectL then
+            -- 图腾条：认不出按钮 ≠ 图腾没了。重建瞬间、Ellesmere 重排、战斗中读不到 rect，
+            -- 都会让识别失败一次。一旦定位成功过就【保持原位】、不停靠——
+            -- 停靠会让绿框整块消失（用户实测「有时候会消失」）；
+            -- 真正的「图腾没了」由暴雪 AuraButton 自己显隐表达（光环消失 → 按钮隐藏）。
+            return
         else
             DockContainer(container, p)
         end
         return
     end
     if not PositionContainer(container, btn, p) then
+        -- 同上：已经定位过就留在原地，不要因为一次读不到 rect 就把标记甩到屏幕外
+        if p.onTotemBar and p._rectL then return end
         DockContainer(container, p)
         return
     end
