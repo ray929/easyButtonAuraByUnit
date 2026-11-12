@@ -269,13 +269,17 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         --    不挂倒计时框与层数。图腾本身的倒计时由客户端图腾条自己显示，我们不重复。
         -- ⚠️ `markStyle = "border"`：标记画成**绿色四边描边**而不是柔光。图腾条按钮本身就是
         --    图腾图标，柔光会把整个图标染绿、与图标本体糊在一起；描边只框住边缘，清楚得多。
+        -- ⚠️ `alsoActionBar = true`：同一条预设**再挂一份到动作条技能按钮**（2026-11-12 用户要求）。
+        --    没开 onTotemBar 时这个字段无意义。两份独立：图腾条那份画绿框；动作条那份走默认柔光，
+        --    用来保留「技能按钮上有绿光 = 图腾正生效」这个老习惯。两份的 key 不同（主文件加 "@bar" 后缀），
+        --    否则会被并成同一组、只剩一个落点。
         -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
         { class = "SHAMAN", auraName = "大地之力", auraSpellID = 8076,
           actionName = "大地之力图腾", actionSpellID = 8075,
-          onTotemBar = true, overlayOnly = true, markStyle = "border" },
+          onTotemBar = true, alsoActionBar = true, overlayOnly = true, markStyle = "border" },
         { class = "SHAMAN", auraName = "石肤术", auraSpellID = 8072,
           actionName = "石肤图腾", actionSpellID = 8071,
-          onTotemBar = true, overlayOnly = true, markStyle = "border" },
+          onTotemBar = true, alsoActionBar = true, overlayOnly = true, markStyle = "border" },
 
         -- 目标减益（2026-11-11 补收编：上一轮漏了烈焰震击，顺带发现神圣之火同样没收录）
         -- 两条都来自角色手动绑定（list），光环名 == 施放名，挂在【敌对目标】身上：

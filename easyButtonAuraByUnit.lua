@@ -1982,8 +1982,11 @@ local function RebuildGroups()
     -- key 以【技能名】为基准（而非 spellID）：Forever 升级换 Rank 后施放技能的 spellID 变了，
     -- 用名字才能复用同一个容器（否则每升一级就多一个停泊屏幕外的旧容器）。
     -- auraIDs 是集合：一条绑定可以同时追踪同名技能的各等级光环 ID。
-    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly, onTotemBar, markStyle)
+    local function addGroup(unit, filter, actionSpellID, actionName, auraIDs, overlayOnly, onTotemBar, markStyle, keySuffix)
+        -- keySuffix：同一条预设要同时挂到两个地方时（图腾条 + 动作条），两者 unit/filter/技能名
+        -- 完全相同，不加后缀会被并成同一个组、后写的那份覆盖前一份（也就只剩一个落点）。
         local key = tostring(unit) .. ":" .. tostring(filter) .. ":" .. tostring(actionName or actionSpellID)
+            .. (keySuffix or "")
         local g = merged[key]
         if not g then
             g = oldByKey[key]
@@ -2122,6 +2125,13 @@ local function RebuildGroups()
                 -- 一个 ID 都没展开到（还没学 / 名字对不上）→ 不建组：空组只会白占一个容器
                 if next(ids) then
                     addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, e.onTotemBar, e.markStyle)
+                    -- alsoActionBar：同一条预设再挂一份到动作条技能按钮上。
+                    -- 两份各自独立（key 加 "@bar" 后缀区分）：图腾条那份画绿框（markStyle），
+                    -- 这份不传 markStyle → 走默认柔光；也不传 onTotemBar → 去动作条找按钮。
+                    -- 用途：既想在图腾条上看「在不在范围」，又想保留动作条按钮上原来的绿柔光。
+                    if e.onTotemBar and e.alsoActionBar then
+                        addGroup(unit, filter, actionSpellID, actionName, ids, e.overlayOnly, nil, nil, "@bar")
+                    end
                 end
             end
         end
