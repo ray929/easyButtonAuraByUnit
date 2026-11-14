@@ -54,9 +54,9 @@ if not B then return end
 -- 暗言术：痛 + 神圣之火·目标减益；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段，外加
 -- 噬灵瘟疫、黑暗献祭、安抚心灵 3 条）/ 德鲁伊 2 条（德-父：月火术、自然之握）/ 萨满 5 条
 -- （石化武器、火舌武器，都是武器灌注、走附魔通道；大地之力图腾、石肤图腾，buff 名与施放名不同；
--- 烈焰震击·目标减益）/ 种族 5 条（血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人、
--- 艾露恩之光·暗夜精灵）/ 各职业常驻增益 13 条。
--- 合计 44 条精选 + 54 条导入 = 98 条。
+-- 烈焰震击·目标减益）/ 种族 6 条（血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人、
+-- 艾露恩之光·暗夜精灵、影遁·暗夜精灵）/ 各职业常驻增益 13 条。
+-- 合计 45 条精选 + 54 条导入 = 99 条。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -296,6 +296,10 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
           actionName = "黑暗献祭", actionSpellID = 1277324 },
         { class = "PRIEST", auraName = "安抚心灵", auraSpellID = 453,
           actionName = "安抚心灵", actionSpellID = 453, unit = "target", filter = "HARMFUL|PLAYER" },
+        -- 影遁（2026-11-14）：暗夜精灵种族技能，20580 来自德-父（暗夜精灵德鲁伊）的 auraSeen 实测。
+        -- 潜行状态没有持续时间（移动/取消才结束）→ overlayOnly：只画存在标记，不挂倒计时框。
+        { race = "NightElf", auraName = "影遁", auraSpellID = 20580,
+          actionName = "影遁", actionSpellID = 20580, overlayOnly = true },
     }
     return
 end
