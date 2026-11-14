@@ -491,7 +491,12 @@ function B.IsPresetAvailable(e)
     if e.class and e.class ~= classToken then return false end
     if e.race then
         local _, raceToken = UnitRace("player")
-        if e.race ~= raceToken then return false end
+        if e.race ~= raceToken then
+            -- ⚠️ UnitRace 对【亡灵】返回 "Scourge"，不是 "Undead"（1.x 起就是如此）。
+            -- 两种写法都认，免得种族条目写 "Undead" 时永远不匹配（2026-11-14 发现）。
+            local ALIAS = { Undead = "Scourge", Scourge = "Undead" }
+            if ALIAS[e.race] ~= raceToken then return false end
+        end
     end
     return true
 end
