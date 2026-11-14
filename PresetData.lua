@@ -50,12 +50,13 @@ if not B then return end
 -- =========================================================
 -- 精选部分来源（2026-11-08 起，持续收编）：读取玩家永恒客户端存档 WTF/Account/RAY0929/95/
 -- */SavedVariables/easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，
--- 外加客户端实测（`/babu weapon`）：圣骑士 7 条（尸-太浓）/ 牧师 9 条（爷爷-泡茶 6 条含手动
--- 暗言术：痛 + 神圣之火·目标减益；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段）/ 萨满 5 条
+-- 外加客户端实测（`/babu weapon`）：圣骑士 7 条（尸-太浓）/ 牧师 12 条（爷爷-泡茶 6 条含手动
+-- 暗言术：痛 + 神圣之火·目标减益；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段，外加
+-- 噬灵瘟疫、黑暗献祭、安抚心灵 3 条）/ 德鲁伊 3 条（德-父：月火术、自然之握、艾露恩之光）/ 萨满 5 条
 -- （石化武器、火舌武器，都是武器灌注、走附魔通道；大地之力图腾、石肤图腾，buff 名与施放名不同；
 -- 烈焰震击·目标减益）/ 种族 4 条（血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人）/
 -- 各职业常驻增益 13 条。
--- 合计 38 条精选 + 54 条导入 = 92 条。
+-- 合计 44 条精选 + 54 条导入 = 98 条。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -275,6 +276,26 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
           actionName = "烈焰震击", actionSpellID = 8050, unit = "target", filter = "HARMFUL|PLAYER" },
         { class = "PRIEST", auraName = "神圣之火", auraSpellID = 14914,
           actionName = "神圣之火", actionSpellID = 14914, unit = "target", filter = "HARMFUL|PLAYER" },
+
+        -- 2026-11-14 收编（角色「德-父」德鲁伊 与「爸爸-不会泡茶」牧师 的 list + learned）
+        -- 月火术 / 噬灵瘟疫 / 安抚心灵 是挂在敌人身上的减益 → unit="target" + HARMFUL|PLAYER；
+        -- 自然之握 / 艾露恩之光 / 黑暗献祭 是自身增益 → 默认 player + HELPFUL。
+        -- ⚠️ 艾露恩之光 1259799、黑暗献祭 1277324 是该客户端自定义法术（ID 在 1.2M/1.27M 段），
+        --    只按「出现在哪个角色的 learned 里」归了职业。若实测发现其实是种族或通用技能，
+        --    把 class 换成 race 或直接去掉即可（客户端没有这两个名字的数据可交叉核对）。
+        -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
+        { class = "DRUID", auraName = "月火术", auraSpellID = 8921,
+          actionName = "月火术", actionSpellID = 8921, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "DRUID", auraName = "自然之握", auraSpellID = 16689,
+          actionName = "自然之握", actionSpellID = 16689 },
+        { class = "DRUID", auraName = "艾露恩之光", auraSpellID = 1259799,
+          actionName = "艾露恩之光", actionSpellID = 1259799 },
+        { class = "PRIEST", auraName = "噬灵瘟疫", auraSpellID = 2944,
+          actionName = "噬灵瘟疫", actionSpellID = 2944, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "PRIEST", auraName = "黑暗献祭", auraSpellID = 1277324,
+          actionName = "黑暗献祭", actionSpellID = 1277324 },
+        { class = "PRIEST", auraName = "安抚心灵", auraSpellID = 453,
+          actionName = "安抚心灵", actionSpellID = 453, unit = "target", filter = "HARMFUL|PLAYER" },
     }
     return
 end
