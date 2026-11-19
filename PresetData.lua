@@ -52,11 +52,12 @@ if not B then return end
 -- */SavedVariables/easyButtonAuraByUnit.lua 里「自动学习 learned」+「手动绑定 list」的真实配对，
 -- 外加客户端实测（`/babu weapon`）：圣骑士 7 条（尸-太浓）/ 牧师 12 条（爷爷-泡茶 6 条含手动
 -- 暗言术：痛 + 神圣之火·目标减益；爸爸-不会泡茶 2 条虚弱之触·buff 与 debuff 两阶段，外加
--- 噬灵瘟疫、黑暗献祭、安抚心灵 3 条）/ 德鲁伊 2 条（德-父：月火术、自然之握）/ 萨满 5 条
+-- 噬灵瘟疫、黑暗献祭、安抚心灵 3 条）/ 德鲁伊 7 条（德-父：月火术、自然之握、挫志咆哮、精灵之火、
+-- 撕扯、扫击、狂怒）/ 萨满 5 条
 -- （石化武器、火舌武器，都是武器灌注、走附魔通道；大地之力图腾、石肤图腾，buff 名与施放名不同；
 -- 烈焰震击·目标减益）/ 种族 6 条（血性狂暴·兽人、感知·人类、食尸·亡灵、石像形态·矮人、
 -- 艾露恩之光·暗夜精灵、影遁·暗夜精灵）/ 各职业常驻增益 13 条。
--- 合计 45 条精选 + 54 条导入 = 99 条。
+-- 合计 50 条精选 + 54 条导入 = 104 条。
 -- 名字均为该客户端给出的本地化名（缺名字的旧条目按客户端物品库交叉核对：圣典：渐隐术 /
 -- 圣典：恢复 / 圣典：心灵之火 / 圣典：暗言术：痛 / EllesmereUI 的 Power Word 两条）。
 -- ⚠️ 名字驱动：auraName 才是匹配键，auraSpellID / actionSpellID 只是「观察到那一级」的 ID，
@@ -300,6 +301,25 @@ if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         -- 潜行状态没有持续时间（移动/取消才结束）→ overlayOnly：只画存在标记，不挂倒计时框。
         { race = "NightElf", auraName = "影遁", auraSpellID = 20580,
           actionName = "影遁", actionSpellID = 20580, overlayOnly = true },
+
+        -- 2026-11-19 收编（德-父 的 list + learned；德-黑 也学到过 狂怒）
+        -- 四条来自手动绑定，全部挂在敌人身上（存档里 auraID 与施放技能同号）：
+        --   挫志咆哮 99（熊形态范围减益）/ 精灵之火 770 / 撕扯 1079（Rip 流血）/ 扫击 1822（Rake 流血）
+        -- 狂怒 5229 是自身增益（learned，unit=player）。
+        -- ⚠️ 99 / 770 / 5229 在 auraSeen 里有实测记录；1079 / 1822 没有（流血结算快，脱战扫描常错过），
+        --    但两者能对上客户端自带 debuff 表（EllesmereUINameplates_DebuffColors：1079 Rip / 1822 Rake，
+        --    都是 Druid 流血），且用户当初就是这么绑的。
+        -- ⚠️ 加在表尾：启停按 ipairs 序号存档（specs[specID].presets[key]），中途插入会错位。
+        { class = "DRUID", auraName = "挫志咆哮", auraSpellID = 99,
+          actionName = "挫志咆哮", actionSpellID = 99, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "DRUID", auraName = "精灵之火", auraSpellID = 770,
+          actionName = "精灵之火", actionSpellID = 770, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "DRUID", auraName = "撕扯", auraSpellID = 1079,
+          actionName = "撕扯", actionSpellID = 1079, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "DRUID", auraName = "扫击", auraSpellID = 1822,
+          actionName = "扫击", actionSpellID = 1822, unit = "target", filter = "HARMFUL|PLAYER" },
+        { class = "DRUID", auraName = "狂怒", auraSpellID = 5229,
+          actionName = "狂怒", actionSpellID = 5229 },
     }
     return
 end
