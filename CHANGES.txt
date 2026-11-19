@@ -1,4 +1,4 @@
-v1.0.14 - ElvUI action-bar support (WoW Forever)
+v1.0.14: ElvUI action-bar support (WoW Forever)
   - Detect ElvUI and prefer its action buttons on bars 1-10 and 13-15.
   - Share button discovery between aura display and learning scans.
   - Resolve the active LibActionButton slot after action-bar paging.
