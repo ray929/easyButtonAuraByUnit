@@ -901,9 +901,15 @@ end
 --     （IsAuraRestricted：combat/encounter/challenge mode/PvP match 任一生效即跳过）。
 --     脱战也不等于可读——大秘境整场期间光环都是 secret（见 IsAuraRestricted 注释）。
 --     扫到的 spellID / 字段再过一道 issecretvalue 双保险（个别法术可被标记 always-secret）。
---   · 扫描源：自身增益 + 敌对目标身上的我方减益
---     （目标 debuff 多在战斗中挂上，脱战后残留时间窗正好可扫——用户确认纳入）。
+--   · 扫描源：自身增益 + 宠物增益 + 敌对目标身上的我方减益
 --     自身减益不扫（2026-10-09 用户确认）：自伤类 debuff 没有同 ID 技能按钮。
+--   🩸 **DoT / 流血类目标减益事实上永远学不到（2026-11-20 用户指出，机制性结论）**：
+--     脱战扫描要求「存在活着的敌对目标」+ 不在战斗/限制状态，而流血、DoT 这类减益的
+--     生命周期就是整场战斗——战斗结束 = 怪已经死了，尸体上没有光环；活着脱战又几乎不可能
+--     （怪没死就不会脱战，除非它逃跑/重置，而重置会清掉 debuff）。所以这类条目在
+--     auraSeen 里**查不到是正常的**，不能因此判定它 ID 错了，更不能按「没有实测证据」删条目。
+--     来源只能是：手动绑定、客户端自带数据表（如 EllesmereUINameplates_DebuffColors）、
+--     或「光环 ID = 施放 ID」这一多数情况的推断。
 --   · 学习条件：有时限（expirationTime>0，滤形态/常驻）+ 我自己施放的（sourceUnit=player）
 --     + 动作条上存在同名/同ID技能 + 与手动/预设/已学去重（同一光环 ID 只活在一张表里，
 --     手动 > 预设 > 学习，所以三者不会冲突重复显示）。上限 64 条 / 专精。
@@ -1100,6 +1106,8 @@ local function ScanLearnableAuras(verbose)
         if #learned >= LEARN_MAX then break end
         if src.needHostileTarget and not HasHostileTarget() then
             log("channel %s/%s: no hostile target, skipped", src.unit, src.filter)
+            -- 这行是给「为什么某条 debuff 一直学不到」的现场答案：战斗结束=目标已死
+            log("  (DoT/bleed debuffs cannot be learned here: combat ends only when the mob dies)")
         else
             local index = 1
             while #learned < LEARN_MAX do
