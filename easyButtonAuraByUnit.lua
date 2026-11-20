@@ -577,8 +577,9 @@ local KNOWN_BAR_PREFIXES = {
 
 local function GetBarPrefixList()
     local list, seen = {}, {}
-    -- Prefer ElvUI buttons when ElvUI is loaded. Keep Blizzard fallback when
-    -- its action-bar module is disabled. ElvUI creates bars 1-10 and 13-15.
+    -- ElvUI（第三方动作条，2026-11-20 用户授权接入）在加载时优先用它的按钮：
+    -- 它接管动作条后暴雪按钮仍在但只是隐藏，两套都扫会先命中 ElvUI。
+    -- 暴雪前缀照旧追加在后 → ElvUI 的动作条模块被关掉时自动回退原生，不会两头空。
     if _G.ElvUI then
         for bar = 1, 15 do
             if bar <= 10 or bar >= 13 then
@@ -604,8 +605,9 @@ local function GetBarPrefixList()
     return list
 end
 
--- LibActionButton stores the currently paged slot in _state_action.
--- Read only: never change secure button attributes, including in combat.
+-- 按钮当前指向的动作槽位。ElvUI 的按钮是 LibActionButton，会跨翻页复用同一个帧，
+-- 当前槽位存在 _state_action 里（_state_type == "action" 时才有意义）；
+-- 暴雪原生按钮没有这两个字段，仍读 .action。全程只读，绝不改保护帧属性。
 local function GetButtonActionSlot(btn)
     if not btn then return end
     if btn._state_type ~= nil then
@@ -615,10 +617,24 @@ local function GetButtonActionSlot(btn)
     return btn.action
 end
 
+-- 按钮当前是否真的在屏幕上。祖先链判断只对 LibActionButton（ElvUI）启用：
+-- 它把隐藏栏的按钮留在原处、自身 IsShown 仍为真，只有 IsVisible 能排除；
+-- 暴雪原生按钮维持 IsShown，与合并前的判据逐字一致（用户要求不动原生路径）。
 local function IsButtonVisible(btn)
     if not btn then return false end
-    if btn.IsVisible then return btn:IsVisible() end
+    if btn._state_type ~= nil and btn.IsVisible then return btn:IsVisible() end
     return btn:IsShown()
+end
+
+-- 构建名字索引 / 扫描时用的「可用槽位」：ElvUI 按钮额外要求可见，原生按钮则与
+-- 合并前等价——只要求有 action 槽位、不看可见性（隐藏栏上的技能仍要进名字索引，
+-- 否则预设按名字展开同名各 Rank 时会缺 ID）。
+local function GetUsableActionSlot(btn)
+    if not btn then return end
+    local slot = GetButtonActionSlot(btn)
+    if not slot then return end
+    if btn._state_type ~= nil and not IsButtonVisible(btn) then return end
+    return slot
 end
 
 -- 原生动作条按钮解析（照搬上游 Preset.lua：按法术名找按钮，缓存 + 自愈验证）
@@ -729,7 +745,7 @@ local function BuildSpellNameIndex()
     for _, prefix in ipairs(GetBarPrefixList()) do
         for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
             local btn = _G[prefix .. i]
-            if IsButtonVisible(btn) and GetButtonActionSlot(btn) then
+            if GetUsableActionSlot(btn) then
                 local id = ResolveActionSpellID(btn)
                 if id then add(id, B.GetSpellNamePlain(id), true) end
             end
@@ -821,7 +837,11 @@ end
 local function ResolveButton(p, actionSpellID)
     local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
     if p.button then
-        local curSpellID = IsButtonVisible(p.button) and ResolveActionSpellID(p.button)
+        -- 校验与查找共用同一套解析（宏按钮经 GetMacroSpell 归一到法术 ID）：
+        -- 旧写法拿 GetActionInfo 的原始第二返回值去 GetSpellName，宏按钮下得到的是宏名，
+        -- 与查找侧的法术名对不上 → 缓存每轮都被判失效、每轮重查一次（不影响显示，白耗）。
+        -- 这里不加可见性判断：原逻辑也不看可见性，一个隐藏在别的栏上的同名按钮仍是有效缓存。
+        local curSpellID = ResolveActionSpellID(p.button)
         local curName = curSpellID and C_Spell.GetSpellName(curSpellID) or nil
         if curName ~= actionName then
             p.button = nil
@@ -851,7 +871,7 @@ function B.BuildSpellButtonMap()
         if type(prefix) == "string" then
             for i = 1, maxBtns do
                 local btn = _G[prefix .. i]
-                if IsButtonVisible(btn) and GetButtonActionSlot(btn) then
+                if GetUsableActionSlot(btn) then
                 local ok, atype, id = pcall(GetActionInfo, GetButtonActionSlot(btn))
                 if ok and atype == "spell" and id and id > 0 and not IsSecret(id) and not map[id] then
                     map[id] = prefix .. i
@@ -885,7 +905,7 @@ function B.ProbeActionBarForName(name, auraSpellID)
     for _, prefix in ipairs(GetBarPrefixList()) do
         for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
             local btn = _G[prefix .. i]
-            if IsButtonVisible(btn) and GetButtonActionSlot(btn) then
+            if GetUsableActionSlot(btn) then
                 local ok, atype, id = pcall(GetActionInfo, GetButtonActionSlot(btn))
                 if ok then
                     local spellID = id

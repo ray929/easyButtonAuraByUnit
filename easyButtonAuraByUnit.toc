@@ -4,7 +4,7 @@
 ## Notes-zhCN: 手动绑定光环 ID 到动作条按钮，或启用内置预设；按钮上显示光环剩余时间、层数与柔光标记。
 ## Notes-zhTW: 手動綁定光環 ID 到快捷列按鈕，或啟用內建預設；按鈕上顯示光環剩餘時間、堆疊數量與柔光標記。
 ## Author: ray929
-## Version: v1.0.14
+## Version: @project-version@
 ## SavedVariablesPerCharacter: easyButtonAuraByUnitDB EasyMinimapHubDB
 ## OptionalDeps: ElvUI
 ## DefaultState: enabled
