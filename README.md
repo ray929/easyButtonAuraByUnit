@@ -6,7 +6,7 @@
 
 ### Features
 
-- Bind any aura to a button: remaining time, stacks and a soft edge glow appear on the button itself.
+- Bind any spell: your own buffs on yourself and your own debuffs on a hostile target are both tracked, no unit picker needed.
 - Built-in presets with per-entry toggles, grouped by category. About 260 on Retail, 104 on WoW Forever; only your class and race load.
 - Bind once by spell name and it keeps working as you learn higher ranks.
 - Auto-learn while out of combat: your timed buffs, buffs on your pet, and your debuffs on a hostile target.
@@ -34,7 +34,7 @@
 
 ### 功能简介
 
-- 任意光环都能绑：按钮上显示倒计时、层数与柔光标记。
+- 绑定任意法术：你身上由你施放的增益、你施放到敌对目标身上的减益，两路自动同时挂，不用选单位。
 - 内置预设，按类别分组、逐条启停：正式服约 260 条，《魔兽世界：永恒》104 条。只加载本职业、本种族的条目。
 - 绑定按技能名匹配，升等级学新 Rank 不用重绑。
 - 脱战自动学习：自身限时增益、宠物身上的增益、敌对目标身上的我方减益。
@@ -62,7 +62,7 @@
 
 ### 功能簡介
 
-- 任意光環都能綁：按鈕上顯示倒數、堆疊數量與柔光標記。
+- 綁定任意法術：你身上由你施放的增益、你施放到敵對目標身上的減益，兩路自動同時掛，不用選單位。
 - 內建預設，按類別分組、逐條啟停：正式服約 260 條，《魔獸世界：永恆》104 條。只載入本職業、本種族的條目。
 - 綁定按技能名稱比對，升等級學新 Rank 不用重綁。
 - 脫戰自動學習：自身限時增益、寵物身上的增益、敵對目標身上的我方減益。
