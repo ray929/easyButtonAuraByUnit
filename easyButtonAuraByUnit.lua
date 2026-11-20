@@ -577,6 +577,17 @@ local KNOWN_BAR_PREFIXES = {
 
 local function GetBarPrefixList()
     local list, seen = {}, {}
+    -- Prefer ElvUI buttons when ElvUI is loaded. Keep Blizzard fallback when
+    -- its action-bar module is disabled. ElvUI creates bars 1-10 and 13-15.
+    if _G.ElvUI then
+        for bar = 1, 15 do
+            if bar <= 10 or bar >= 13 then
+                local prefix = "ElvUI_Bar" .. bar .. "Button"
+                seen[prefix] = true
+                list[#list + 1] = prefix
+            end
+        end
+    end
     local blizz = (ActionButtonUtil and ActionButtonUtil.ActionBarButtonNames) or {}
     for _, p in ipairs(blizz) do
         if type(p) == "string" and not seen[p] then
@@ -593,6 +604,23 @@ local function GetBarPrefixList()
     return list
 end
 
+-- LibActionButton stores the currently paged slot in _state_action.
+-- Read only: never change secure button attributes, including in combat.
+local function GetButtonActionSlot(btn)
+    if not btn then return end
+    if btn._state_type ~= nil then
+        if btn._state_type == "action" then return tonumber(btn._state_action) end
+        return nil
+    end
+    return btn.action
+end
+
+local function IsButtonVisible(btn)
+    if not btn then return false end
+    if btn.IsVisible then return btn:IsVisible() end
+    return btn:IsShown()
+end
+
 -- 原生动作条按钮解析（照搬上游 Preset.lua：按法术名找按钮，缓存 + 自愈验证）
 -- =========================================================
 local function FindActionButtonForSpellName(name)
@@ -602,8 +630,8 @@ local function FindActionButtonForSpellName(name)
             local btn = _G[actionBar .. i]
             -- 只匹配【可见】的按钮：左右动作条共享 action 槽位，同一技能会同时命中两个按钮，
             -- 不跳过隐藏按钮会错误匹配到隐藏栏（"拖到右栏却显示在左栏/不显示"）。
-            if btn and btn:IsShown() then
-                local atype, actionSpellID = GetActionInfo(btn.action)
+            if IsButtonVisible(btn) then
+                local atype, actionSpellID = GetActionInfo(GetButtonActionSlot(btn))
                 if atype == "macro" and type(actionSpellID) == "number" then
                     -- 宏按钮 GetActionInfo 第二返回值的语义在版本间有分歧：宏槽位号或
                     -- 宏指向的法术 ID。12.x 实测是后者（GetSpellName 直接命中宏名）——
@@ -644,8 +672,9 @@ end
 -- 技能 ID 与光环 ID 是两套常见不同的值（复原：技能 1231411 / 光环 1231418）——学习条目
 -- 两者分开存：auraID 用于光环匹配，actionSpellID 用于按钮定位与 IsPlayerSpell 门禁。
 local function ResolveActionSpellID(btn)
-    if not (btn and btn.action ~= nil) then return end
-    local ok, atype, id = pcall(GetActionInfo, btn.action)
+    local slot = GetButtonActionSlot(btn)
+    if not slot then return end
+    local ok, atype, id = pcall(GetActionInfo, slot)
     if not ok then return end
     if atype == "spell" and type(id) == "number" and id > 0 and not IsSecret(id) then
         return id
@@ -700,7 +729,7 @@ local function BuildSpellNameIndex()
     for _, prefix in ipairs(GetBarPrefixList()) do
         for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
             local btn = _G[prefix .. i]
-            if btn and btn.action then
+            if IsButtonVisible(btn) and GetButtonActionSlot(btn) then
                 local id = ResolveActionSpellID(btn)
                 if id then add(id, B.GetSpellNamePlain(id), true) end
             end
@@ -791,9 +820,9 @@ end
 --    由 ID 反查名字会落空；名字在换 Rank 前后不变。
 local function ResolveButton(p, actionSpellID)
     local actionName = p.actionName or C_Spell.GetSpellName(actionSpellID)
-    if p.button and p.button.action ~= nil then
-        local okA, _, curSpellID = pcall(GetActionInfo, p.button.action)
-        local curName = (okA and curSpellID) and C_Spell.GetSpellName(curSpellID) or nil
+    if p.button then
+        local curSpellID = IsButtonVisible(p.button) and ResolveActionSpellID(p.button)
+        local curName = curSpellID and C_Spell.GetSpellName(curSpellID) or nil
         if curName ~= actionName then
             p.button = nil
         end
@@ -822,8 +851,8 @@ function B.BuildSpellButtonMap()
         if type(prefix) == "string" then
             for i = 1, maxBtns do
                 local btn = _G[prefix .. i]
-                if btn and btn.action then
-                local ok, atype, id = pcall(GetActionInfo, btn.action)
+                if IsButtonVisible(btn) and GetButtonActionSlot(btn) then
+                local ok, atype, id = pcall(GetActionInfo, GetButtonActionSlot(btn))
                 if ok and atype == "spell" and id and id > 0 and not IsSecret(id) and not map[id] then
                     map[id] = prefix .. i
                 elseif ok and atype == "macro" and type(id) == "number" then
@@ -856,8 +885,8 @@ function B.ProbeActionBarForName(name, auraSpellID)
     for _, prefix in ipairs(GetBarPrefixList()) do
         for i = 1, (NUM_ACTIONBAR_BUTTONS or 12) do
             local btn = _G[prefix .. i]
-            if btn and btn.action then
-                local ok, atype, id = pcall(GetActionInfo, btn.action)
+            if IsButtonVisible(btn) and GetButtonActionSlot(btn) then
+                local ok, atype, id = pcall(GetActionInfo, GetButtonActionSlot(btn))
                 if ok then
                     local spellID = id
                     if atype == "macro" and type(id) == "number" then
